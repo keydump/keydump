@@ -70,7 +70,12 @@ pub struct ExportArgs {
     pub format: String,
 
     /// Password for PKCS#12 export
-    #[arg(long, default_value = "export")]
+    #[arg(
+        long,
+        default_value = "export",
+        env = "KD_P12_PASS",
+        hide_env_values = true
+    )]
     pub p12_pass: String,
 
     /// Also export keys that are already SecItem-exportable (default: non-exportable only)
@@ -89,11 +94,16 @@ pub struct CommonArgs {
     pub keychain: Option<PathBuf>,
 
     /// Keychain password (classic PBKDF2 path; may fail on macOS 26.x SEP-wrapped keychains)
-    #[arg(short = 'p', long, env = "KD_PASSWORD")]
+    #[arg(short = 'p', long, env = "KD_PASSWORD", hide_env_values = true)]
     pub password: Option<String>,
 
     /// 24-byte master key as hex (48 hex chars)
-    #[arg(short = 'k', long = "master-key", env = "KD_MASTER_KEY")]
+    #[arg(
+        short = 'k',
+        long = "master-key",
+        env = "KD_MASTER_KEY",
+        hide_env_values = true
+    )]
     pub master_key: Option<String>,
 
     /// Recover master key by scanning securityd memory (macOS, root, SIP-sensitive)
@@ -111,4 +121,32 @@ pub struct CommonArgs {
     /// Allow printing master/db key material to stderr (dangerous)
     #[arg(long, hide = true)]
     pub print_secrets: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{Arg, Command, CommandFactory};
+
+    use super::Cli;
+
+    fn find_arg<'a>(command: &'a Command, id: &str) -> Option<&'a Arg> {
+        command
+            .get_arguments()
+            .find(|arg| arg.get_id() == id)
+            .or_else(|| {
+                command
+                    .get_subcommands()
+                    .find_map(|subcommand| find_arg(subcommand, id))
+            })
+    }
+
+    #[test]
+    fn secret_environment_values_are_hidden_from_help() {
+        let command = Cli::command();
+
+        for id in ["password", "master_key", "p12_pass"] {
+            let arg = find_arg(&command, id).expect("secret argument exists");
+            assert!(arg.is_hide_env_values_set(), "{id} must hide its env value");
+        }
+    }
 }
