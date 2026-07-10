@@ -14,8 +14,8 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::cli::{Cli, Command, CommonArgs};
 use crate::error::{KdError, Result};
 use crate::export::{
-    decrypt_all_keys, default_keychain_path, export_all, match_identities, validate_output_dir,
-    OutputFormat,
+    decrypt_all_keys, default_keychain_path, export_all, filter_by_name, match_identities,
+    validate_output_dir, OutputFormat,
 };
 use crate::keychain::KeychainFile;
 use crate::unlock::{try_master_key_hex, try_password, unlock_from_securityd, Unlocked};
@@ -225,14 +225,12 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
     }
 
     let pks = kc.private_keys()?;
-    let certs = kc.certificates()?;
-    let keys = decrypt_all_keys(
-        &unlocked,
-        &pks,
-        args.name.as_deref(),
-        args.include_exportable,
-    )?;
-    let identities = match_identities(&keys, &certs);
+    let mut certs = kc.certificates()?;
+    let mut keys = decrypt_all_keys(&unlocked, &pks, args.include_exportable)?;
+    let mut identities = match_identities(&keys, &certs);
+    if let Some(filter) = args.name.as_deref() {
+        filter_by_name(&mut keys, &mut certs, &mut identities, filter);
+    }
     let format = args.format;
     let p12_pass = resolve_p12_password(args.p12_pass.take(), format)?;
 

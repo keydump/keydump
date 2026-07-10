@@ -79,7 +79,6 @@ pub struct MatchedIdentity {
 pub fn decrypt_all_keys(
     unlocked: &Unlocked,
     records: &[PrivateKeyRecord],
-    name_filter: Option<&str>,
     include_exportable: bool,
 ) -> Result<Vec<DecryptedKey>> {
     let mut out = Vec::new();
@@ -87,15 +86,6 @@ pub fn decrypt_all_keys(
         // Default: only Extractable=0 (SecItem non-exportable software keys).
         if !include_exportable && rec.extractable != 0 {
             continue;
-        }
-        if let Some(f) = name_filter {
-            if !rec
-                .print_name
-                .to_ascii_lowercase()
-                .contains(&f.to_ascii_lowercase())
-            {
-                continue;
-            }
         }
         match unlocked.decrypt_private_key(rec) {
             Ok((descriptive_data, der)) => {
@@ -127,6 +117,23 @@ pub fn decrypt_all_keys(
         }
     }
     Ok(out)
+}
+
+fn name_matches(name: &str, filter: &str) -> bool {
+    name.to_lowercase().contains(&filter.to_lowercase())
+}
+
+pub fn filter_by_name(
+    keys: &mut Vec<DecryptedKey>,
+    certs: &mut Vec<X509Record>,
+    identities: &mut Vec<MatchedIdentity>,
+    filter: &str,
+) {
+    identities.retain(|identity| {
+        name_matches(&identity.key.print_name, filter) || name_matches(&identity.cert_name, filter)
+    });
+    keys.retain(|key| name_matches(&key.print_name, filter));
+    certs.retain(|cert| name_matches(&cert.print_name, filter));
 }
 
 fn rsa_modulus_from_key_der(der: &[u8]) -> Option<Vec<u8>> {
@@ -469,5 +476,49 @@ mod tests {
 
         let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    fn test_key(name: &str) -> DecryptedKey {
+        DecryptedKey {
+            print_name: name.into(),
+            extractable: 0,
+            key_size_bits: 2048,
+            descriptive_data: Vec::new(),
+            der: Zeroizing::new(vec![1]),
+        }
+    }
+
+    #[test]
+    fn name_filter_applies_to_keys_certs_and_either_identity_side() {
+        let mut keys = vec![test_key("client key"), test_key("other key")];
+        let mut certs = vec![
+            X509Record {
+                print_name: "CLIENT CERT".into(),
+                der: vec![2],
+            },
+            X509Record {
+                print_name: "other cert".into(),
+                der: vec![3],
+            },
+        ];
+        let mut identities = vec![
+            MatchedIdentity {
+                key: test_key("unrelated key label"),
+                cert_der: vec![2],
+                cert_name: "CLIENT CERT".into(),
+            },
+            MatchedIdentity {
+                key: test_key("other key"),
+                cert_der: vec![3],
+                cert_name: "other cert".into(),
+            },
+        ];
+
+        filter_by_name(&mut keys, &mut certs, &mut identities, "client");
+
+        assert_eq!(keys.len(), 1);
+        assert_eq!(certs.len(), 1);
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0].cert_name, "CLIENT CERT");
     }
 }
