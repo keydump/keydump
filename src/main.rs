@@ -179,12 +179,12 @@ fn cmd_list(common: CommonArgs) -> Result<()> {
     }
 
     if let Some(u) = unlock(&common, &kc)? {
-        eprintln!("unlocked via {} (db_key ok)", u.method);
+        eprintln!("unlocked via {} (db_key ok)", u.method());
         if common.print_secrets {
-            if let Some(ref m) = u.master_key {
+            if let Some(m) = u.master_key() {
                 eprintln!("master_key={}", hex::encode(m));
             }
-            eprintln!("db_key={}", hex::encode(&u.db_key));
+            eprintln!("db_key={}", hex::encode(u.database_key()));
         }
         let mut ok = 0;
         for k in &pks {
@@ -217,12 +217,12 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
     let unlocked = unlock(&args.common, &kc)?.ok_or_else(|| {
         KdError::Msg("export requires unlock: --password, --master-key, or --from-securityd".into())
     })?;
-    eprintln!("unlocked via {}", unlocked.method);
+    eprintln!("unlocked via {}", unlocked.method());
     if args.common.print_secrets {
-        if let Some(ref m) = unlocked.master_key {
+        if let Some(m) = unlocked.master_key() {
             eprintln!("master_key={}", hex::encode(m));
         }
-        eprintln!("db_key={}", hex::encode(&unlocked.db_key));
+        eprintln!("db_key={}", hex::encode(unlocked.database_key()));
     }
 
     let pks = kc.private_keys()?;

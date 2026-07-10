@@ -29,9 +29,9 @@ pub fn unlock_from_securityd(_kc: &KeychainFile) -> Result<Unlocked> {
 
 /// Unlocked keychain DB wrapping key + helpers to decrypt private keys.
 pub struct Unlocked {
-    pub db_key: Zeroizing<Vec<u8>>,
-    pub master_key: Option<Zeroizing<Vec<u8>>>,
-    pub method: &'static str,
+    db_key: Zeroizing<Vec<u8>>,
+    master_key: Option<Zeroizing<Vec<u8>>>,
+    method: &'static str,
 }
 
 struct DbKeyValidator {
@@ -84,6 +84,18 @@ impl Unlocked {
             master_key: Some(Zeroizing::new(master.to_vec())),
             method: "master-key",
         })
+    }
+
+    pub fn method(&self) -> &'static str {
+        self.method
+    }
+
+    pub fn master_key(&self) -> Option<&[u8]> {
+        self.master_key.as_ref().map(|key| key.as_slice())
+    }
+
+    pub fn database_key(&self) -> &[u8] {
+        self.db_key.as_slice()
     }
 
     pub fn decrypt_private_key(
