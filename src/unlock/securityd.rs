@@ -19,6 +19,30 @@ const DB_KEY_LEN: usize = 24;
 const SCAN_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 const CANDIDATE_ALIGNMENT: u64 = 4;
 
+#[derive(Clone, Copy)]
+enum ValidationPass {
+    Probe,
+    Exhaustive,
+}
+
+struct ScanContext<'a> {
+    db_iv: &'a [u8; 8],
+    db_ct: &'a [u8],
+    validator: &'a DbKeyValidator,
+    validation: ValidationPass,
+}
+
+impl ScanContext<'_> {
+    fn validates(&self, db_key: &[u8]) -> bool {
+        if matches!(self.validation, ValidationPass::Probe)
+            && !self.validator.validates_probe(db_key)
+        {
+            return false;
+        }
+        self.validator.validates(db_key)
+    }
+}
+
 extern "C" {
     fn geteuid() -> u32;
     fn task_for_pid(target_tport: u32, pid: i32, t: *mut u32) -> i32;
@@ -210,19 +234,28 @@ pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
     let region_count = regions.len();
     let scanned: u64 = regions.iter().map(|(start, end)| end - start).sum();
 
-    // Heap allocations are normally aligned. Scan aligned candidates across
-    // the whole heap first, then the remaining byte alignments as fallbacks.
-    for alignment in 0..CANDIDATE_ALIGNMENT {
-        for (start, end) in &regions {
-            let size = end - start;
-            if let Some(hit) = scan_region(task.0, *start, size, alignment, &iv, ct, &validator) {
-                return Ok(hit);
+    // Heap allocations are normally aligned. First scan with one structurally
+    // valid record as a cheap probe. If that record is damaged, repeat with
+    // exhaustive validation so the optimization cannot hide a valid key.
+    for validation in [ValidationPass::Probe, ValidationPass::Exhaustive] {
+        let context = ScanContext {
+            db_iv: &iv,
+            db_ct: ct,
+            validator: &validator,
+            validation,
+        };
+        for alignment in 0..CANDIDATE_ALIGNMENT {
+            for (start, end) in &regions {
+                let size = end - start;
+                if let Some(hit) = scan_region(task.0, *start, size, alignment, &context) {
+                    return Ok(hit);
+                }
             }
         }
     }
 
     Err(KdError::Securityd(format!(
-        "no valid DB/master key found in securityd MALLOC heaps (scanned ~{} MB, {region_count} regions, 4 alignment passes). \
+        "no valid DB/master key found in securityd MALLOC heaps (scanned ~{} MB, {region_count} regions, probe + exhaustive validation across 4 alignments). \
          Ensure the keychain is unlocked (e.g. security unlock-keychain), then retry. \
          If SIP Debugging Restrictions are enabled, memory scan cannot work — use --master-key \
          obtained by other authorized means, or --password on legacy (non-SEP) keychains.",
@@ -235,9 +268,7 @@ fn scan_region(
     address: u64,
     size: u64,
     alignment: u64,
-    db_iv: &[u8; 8],
-    db_ct: &[u8],
-    validator: &DbKeyValidator,
+    context: &ScanContext<'_>,
 ) -> Option<Unlocked> {
     let end = address.checked_add(size)?;
     let overlap = (MASTER_KEY_LEN - 1) as u64;
@@ -251,9 +282,7 @@ fn scan_region(
                 cursor,
                 main_size as usize,
                 alignment,
-                db_iv,
-                db_ct,
-                validator,
+                context,
             ) {
                 return Some(hit);
             }
@@ -280,9 +309,7 @@ fn scan_bytes(
     base_address: u64,
     start_limit: usize,
     alignment: u64,
-    db_iv: &[u8; 8],
-    db_ct: &[u8],
-    validator: &DbKeyValidator,
+    context: &ScanContext<'_>,
 ) -> Option<Unlocked> {
     if mem.len() < MASTER_KEY_LEN {
         return None;
@@ -291,7 +318,7 @@ fn scan_bytes(
     // Pass 1: DB key directly
     for off in candidate_offsets(base_address, mem.len(), start_limit, alignment) {
         let cand = &mem[off..off + DB_KEY_LEN];
-        if entropy_ok(cand) && validator.validates(cand) {
+        if entropy_ok(cand) && context.validates(cand) {
             let db_key = Zeroizing::new(cand.to_vec());
             return Some(Unlocked {
                 db_key,
@@ -305,8 +332,8 @@ fn scan_bytes(
     for off in candidate_offsets(base_address, mem.len(), start_limit, alignment) {
         let master = &mem[off..off + MASTER_KEY_LEN];
         if entropy_ok(master) {
-            if let Ok(db_key) = decrypt_db_key(master, db_iv, db_ct) {
-                if validator.validates(&db_key) {
+            if let Ok(db_key) = decrypt_db_key(master, context.db_iv, context.db_ct) {
+                if context.validates(&db_key) {
                     let master_z = Zeroizing::new(master.to_vec());
                     return Some(Unlocked {
                         db_key,

@@ -63,12 +63,29 @@ impl DbKeyValidator {
             return true;
         }
 
-        self.private_keys.iter().any(|record| {
-            let Ok((_, der)) = private_key_decrypt(db_key, &record.iv, &record.encrypted) else {
-                return false;
-            };
-            PKey::private_key_from_der(&der).is_ok() || Rsa::private_key_from_der(&der).is_ok()
-        })
+        self.private_keys
+            .iter()
+            .any(|record| Self::private_key_validates(record, db_key))
+    }
+
+    /// Cheap prefilter for memory scanning. Trying every keychain record for
+    /// every 24-byte heap window makes a normal scan prohibitively expensive.
+    /// The scanner falls back to `validates` over the full heap if this probe
+    /// record is damaged or otherwise unsuitable.
+    fn validates_probe(&self, db_key: &[u8]) -> bool {
+        if let Some(blob) = self.symmetric_blobs.first() {
+            return symmetric_keyblob_decrypt(db_key, &blob.iv, &blob.ciphertext).is_ok();
+        }
+        self.private_keys
+            .first()
+            .is_some_and(|record| Self::private_key_validates(record, db_key))
+    }
+
+    fn private_key_validates(record: &PrivateKeyRecord, db_key: &[u8]) -> bool {
+        let Ok((_, der)) = private_key_decrypt(db_key, &record.iv, &record.encrypted) else {
+            return false;
+        };
+        PKey::private_key_from_der(&der).is_ok() || Rsa::private_key_from_der(&der).is_ok()
     }
 }
 
@@ -166,7 +183,27 @@ mod tests {
             private_keys: Vec::new(),
         };
 
+        assert!(!validator.validates_probe(&db_key));
         assert!(validator.validates(&db_key));
         assert!(!validator.validates(&[0x44; 24]));
+    }
+
+    #[test]
+    fn scan_probe_uses_one_structurally_valid_record() {
+        let db_key: Vec<_> = (0..24).collect();
+        let validator = DbKeyValidator {
+            symmetric_blobs: vec![
+                wrapped_symmetric_blob(&db_key, [0x33; 8]),
+                SymKeyBlob {
+                    iv: [0x44; 8],
+                    ciphertext: vec![0; 48],
+                },
+            ],
+            private_keys: Vec::new(),
+        };
+
+        assert!(validator.validates_probe(&db_key));
+        assert!(validator.validates(&db_key));
+        assert!(!validator.validates_probe(&[0x55; 24]));
     }
 }
