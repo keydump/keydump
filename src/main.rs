@@ -142,7 +142,7 @@ fn unlock(common: &CommonArgs, kc: &KeychainFile) -> Result<Option<Unlocked>> {
                 "unlock: securityd scan (root + SIP Debugging Restrictions must allow task_for_pid)"
             );
         }
-        return Ok(Some(unlock_from_securityd(kc)?));
+        return Ok(Some(unlock_from_securityd(kc, common.verbose)?));
     }
     Ok(None)
 }

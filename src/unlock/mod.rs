@@ -21,7 +21,7 @@ pub use password::unlock_with_password;
 pub use securityd::unlock_from_securityd;
 
 #[cfg(not(target_os = "macos"))]
-pub fn unlock_from_securityd(_kc: &KeychainFile) -> Result<Unlocked> {
+pub fn unlock_from_securityd(_kc: &KeychainFile, _verbose: bool) -> Result<Unlocked> {
     Err(KdError::Securityd(
         "--from-securityd is only available on macOS".into(),
     ))

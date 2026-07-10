@@ -25,6 +25,15 @@ enum ValidationPass {
     Exhaustive,
 }
 
+impl ValidationPass {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Probe => "probe",
+            Self::Exhaustive => "exhaustive fallback",
+        }
+    }
+}
+
 struct ScanContext<'a> {
     db_iv: &'a [u8; 8],
     db_ct: &'a [u8],
@@ -220,7 +229,7 @@ fn parse_malloc_regions(text: &str) -> Vec<(u64, u64)> {
 }
 
 /// Scan securityd MALLOC heaps for DB wrapping key (preferred) or master key.
-pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
+pub fn unlock_from_securityd(kc: &KeychainFile, verbose: bool) -> Result<Unlocked> {
     require_root()?;
     let pid = securityd_pid()?;
 
@@ -233,6 +242,12 @@ pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
     let regions = malloc_regions(pid)?;
     let region_count = regions.len();
     let scanned: u64 = regions.iter().map(|(start, end)| end - start).sum();
+    if verbose {
+        eprintln!(
+            "securityd scan: {region_count} MALLOC regions, ~{} MiB total",
+            scanned / (1024 * 1024)
+        );
+    }
 
     // Heap allocations are normally aligned. First scan with one structurally
     // valid record as a cheap probe. If that record is damaged, repeat with
@@ -245,8 +260,19 @@ pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
             validation,
         };
         for alignment in 0..CANDIDATE_ALIGNMENT {
-            for (start, end) in &regions {
+            for (region_index, (start, end)) in regions.iter().enumerate() {
                 let size = end - start;
+                if verbose {
+                    eprintln!(
+                        "securityd scan: {} pass, alignment {}/{}, region {}/{} ({} KiB)",
+                        validation.label(),
+                        alignment + 1,
+                        CANDIDATE_ALIGNMENT,
+                        region_index + 1,
+                        region_count,
+                        size / 1024
+                    );
+                }
                 if let Some(hit) = scan_region(task.0, *start, size, alignment, &context) {
                     return Ok(hit);
                 }
