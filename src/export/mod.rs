@@ -11,6 +11,38 @@ use crate::error::{KdError, Result};
 use crate::keychain::{PrivateKeyRecord, X509Record};
 use crate::unlock::Unlocked;
 
+/// Reject output paths that could mix a new export with existing data.
+///
+/// A missing path or an existing empty directory is accepted. Symlinks,
+/// non-directories, and non-empty directories are rejected.
+pub fn validate_output_dir(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(KdError::Msg(format!(
+                    "output path must not be a symlink: {}",
+                    path.display()
+                )));
+            }
+            if !metadata.is_dir() {
+                return Err(KdError::Msg(format!(
+                    "output path exists and is not a directory: {}",
+                    path.display()
+                )));
+            }
+            if fs::read_dir(path)?.next().transpose()?.is_some() {
+                return Err(KdError::Msg(format!(
+                    "output directory must be empty: {}",
+                    path.display()
+                )));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Pem,
@@ -202,6 +234,8 @@ pub fn export_all(
     format: OutputFormat,
     p12_pass: &str,
 ) -> Result<ExportStats> {
+    // Re-check at the write seam so library callers cannot bypass the CLI guard.
+    validate_output_dir(out_dir)?;
     ensure_dir(out_dir)?;
     let keys_dir = out_dir.join("keys");
     let certs_dir = out_dir.join("certs");
@@ -318,4 +352,68 @@ pub fn default_keychain_path() -> PathBuf {
 
 fn dirs_next_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("kd-export-{}-{id}", std::process::id()));
+            fs::create_dir(&path).expect("create test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn output_dir_accepts_missing_or_empty_directory() {
+        let root = TestDir::new();
+        let missing = root.0.join("missing");
+        let empty = root.0.join("empty");
+        fs::create_dir(&empty).unwrap();
+
+        assert!(validate_output_dir(&missing).is_ok());
+        assert!(validate_output_dir(&empty).is_ok());
+    }
+
+    #[test]
+    fn output_dir_rejects_non_empty_directory_and_file() {
+        let root = TestDir::new();
+        let non_empty = root.0.join("non-empty");
+        let file = root.0.join("file");
+        fs::create_dir(&non_empty).unwrap();
+        fs::write(non_empty.join("existing"), b"data").unwrap();
+        fs::write(&file, b"data").unwrap();
+
+        assert!(validate_output_dir(&non_empty).is_err());
+        assert!(validate_output_dir(&file).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_dir_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestDir::new();
+        let target = root.0.join("target");
+        let link = root.0.join("link");
+        fs::create_dir(&target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(validate_output_dir(&link).is_err());
+    }
 }

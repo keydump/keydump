@@ -13,7 +13,8 @@ use clap::Parser;
 use crate::cli::{Cli, Command, CommonArgs};
 use crate::error::{KdError, Result};
 use crate::export::{
-    decrypt_all_keys, default_keychain_path, export_all, match_identities, OutputFormat,
+    decrypt_all_keys, default_keychain_path, export_all, match_identities, validate_output_dir,
+    OutputFormat,
 };
 use crate::keychain::KeychainFile;
 use crate::unlock::{try_master_key_hex, try_password, unlock_from_securityd, Unlocked};
@@ -154,6 +155,9 @@ fn cmd_list(common: CommonArgs) -> Result<()> {
 }
 
 fn cmd_export(args: cli::ExportArgs) -> Result<()> {
+    // Fail before opening or decrypting the keychain if results could be mixed
+    // with an earlier export.
+    validate_output_dir(&args.output)?;
     let path = resolve_keychain(&args.common.keychain);
     let kc = KeychainFile::open(&path)?;
     if args.common.verbose {
