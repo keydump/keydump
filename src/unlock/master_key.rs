@@ -1,7 +1,8 @@
 use crate::crypto::MASTER_KEY_LEN;
 use crate::error::{KdError, Result};
+use zeroize::Zeroizing;
 
-pub fn parse_master_key_hex(s: &str) -> Result<Vec<u8>> {
+pub fn parse_master_key_hex(s: &str) -> Result<Zeroizing<Vec<u8>>> {
     let cleaned = s.trim().trim_start_matches("0x");
     let bytes = hex::decode(cleaned).map_err(|e| KdError::Msg(format!("invalid hex key: {e}")))?;
     if bytes.len() != MASTER_KEY_LEN {
@@ -11,5 +12,5 @@ pub fn parse_master_key_hex(s: &str) -> Result<Vec<u8>> {
             bytes.len()
         )));
     }
-    Ok(bytes)
+    Ok(Zeroizing::new(bytes))
 }

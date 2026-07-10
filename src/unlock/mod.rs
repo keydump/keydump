@@ -52,7 +52,10 @@ impl Unlocked {
         })
     }
 
-    pub fn decrypt_private_key(&self, rec: &PrivateKeyRecord) -> Result<(Vec<u8>, Vec<u8>)> {
+    pub fn decrypt_private_key(
+        &self,
+        rec: &PrivateKeyRecord,
+    ) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
         private_key_decrypt(&self.db_key, &rec.iv, &rec.encrypted)
     }
 }

@@ -16,7 +16,7 @@ pub fn unlock_with_password(
         .db_blob
         .ciphertext(&kc.data)
         .ok_or_else(|| KdError::InvalidKeychain("DBBlob ciphertext oob".into()))?;
-    let db_key = match decrypt_db_key(&master, &kc.db_blob.iv, ct) {
+    let db_key = match decrypt_db_key(&master[..], &kc.db_blob.iv, ct) {
         Ok(k) => k,
         Err(_) => {
             return Err(KdError::WrongCredential);

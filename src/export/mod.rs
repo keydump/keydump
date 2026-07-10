@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::X509;
+use zeroize::Zeroizing;
 
 use crate::error::{KdError, Result};
 use crate::keychain::{PrivateKeyRecord, X509Record};
@@ -71,16 +72,14 @@ impl OutputFormat {
     }
 }
 
-#[derive(Debug)]
 pub struct DecryptedKey {
     pub print_name: String,
     pub extractable: u32,
     pub key_size_bits: u32,
     pub keyname: Vec<u8>,
-    pub der: Vec<u8>,
+    pub der: Zeroizing<Vec<u8>>,
 }
 
-#[derive(Debug)]
 pub struct MatchedIdentity {
     pub key: DecryptedKey,
     pub cert_der: Vec<u8>,
@@ -330,12 +329,12 @@ pub fn export_all(
     Ok(stats)
 }
 
-fn key_der_to_pem(der: &[u8]) -> Option<Vec<u8>> {
+fn key_der_to_pem(der: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
     if let Ok(rsa) = Rsa::private_key_from_der(der) {
-        return rsa.private_key_to_pem().ok();
+        return rsa.private_key_to_pem().ok().map(Zeroizing::new);
     }
     if let Ok(pkey) = PKey::private_key_from_der(der) {
-        return pkey.private_key_to_pem_pkcs8().ok();
+        return pkey.private_key_to_pem_pkcs8().ok().map(Zeroizing::new);
     }
     None
 }
@@ -355,9 +354,10 @@ fn write_pkcs12(key_der: &[u8], cert_der: &[u8], pass: &str, path: &Path) -> Res
     let p12 = builder
         .build2(pass)
         .map_err(|e| KdError::Msg(format!("p12 build: {e}")))?;
-    let der = p12
-        .to_der()
-        .map_err(|e| KdError::Msg(format!("p12 der: {e}")))?;
+    let der = Zeroizing::new(
+        p12.to_der()
+            .map_err(|e| KdError::Msg(format!("p12 der: {e}")))?,
+    );
     write_private(path, &der)
 }
 

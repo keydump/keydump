@@ -32,11 +32,11 @@ pub fn symmetric_keyblob_decrypt(
     if plain.len() < 32 {
         return Err(KdError::Crypto("sym keyblob stage1 too short".into()));
     }
-    let mut rev = [0u8; 32];
+    let mut rev = Zeroizing::new([0u8; 32]);
     for i in 0..32 {
         rev[i] = plain[31 - i];
     }
-    let final_plain = des3_cbc_decrypt(db_key, record_iv, &rev)?;
+    let final_plain = des3_cbc_decrypt(db_key, record_iv, &rev[..])?;
     if final_plain.len() < 4 + DB_KEY_LEN {
         return Err(KdError::Crypto("sym keyblob stage2 too short".into()));
     }
@@ -58,18 +58,18 @@ pub fn private_key_decrypt(
     db_key: &[u8],
     record_iv: &[u8],
     encrypted: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>)> {
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
     let plain = des3_cbc_decrypt(db_key, &MAGIC_CMS_IV, encrypted)?;
     if plain.is_empty() {
         return Err(KdError::Crypto("private key stage1 empty".into()));
     }
-    let rev: Vec<u8> = plain.iter().rev().copied().collect();
+    let rev = Zeroizing::new(plain.iter().rev().copied().collect::<Vec<_>>());
     let final_plain = des3_cbc_decrypt(db_key, record_iv, &rev)?;
     if final_plain.len() < 12 {
         return Err(KdError::Crypto("private key stage2 too short".into()));
     }
     let keyname = final_plain[..12].to_vec();
-    let keyblob = final_plain[12..].to_vec();
+    let keyblob = Zeroizing::new(final_plain[12..].to_vec());
     if keyblob.is_empty() {
         return Err(KdError::Crypto("private key material empty".into()));
     }

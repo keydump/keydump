@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::cli::{Cli, Command, CommonArgs};
 use crate::error::{KdError, Result};
@@ -67,12 +68,17 @@ fn read_secret_file(path: &Path, label: &str) -> Result<String> {
             path.display()
         ))
     })?;
-    let mut value = String::from_utf8(bytes).map_err(|_| {
-        KdError::Msg(format!(
-            "{label} file must contain UTF-8 text: {}",
-            path.display()
-        ))
-    })?;
+    let mut value = match String::from_utf8(bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            let mut bytes = error.into_bytes();
+            bytes.zeroize();
+            return Err(KdError::Msg(format!(
+                "{label} file must contain UTF-8 text: {}",
+                path.display()
+            )));
+        }
+    };
     while value.ends_with(['\r', '\n']) {
         value.pop();
     }
@@ -192,7 +198,7 @@ fn cmd_list(common: CommonArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_export(args: cli::ExportArgs) -> Result<()> {
+fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
     // Fail before opening or decrypting the keychain if results could be mixed
     // with an earlier export.
     validate_output_dir(&args.output)?;
@@ -228,7 +234,7 @@ fn cmd_export(args: cli::ExportArgs) -> Result<()> {
     )?;
     let identities = match_identities(&keys, &certs);
     let format = OutputFormat::parse(&args.format)?;
-    let p12_pass = resolve_p12_password(args.p12_pass, format)?;
+    let p12_pass = resolve_p12_password(args.p12_pass.take(), format)?;
 
     let stats = export_all(&args.output, &keys, &certs, &identities, format, &p12_pass)?;
 
@@ -251,21 +257,28 @@ fn cmd_export(args: cli::ExportArgs) -> Result<()> {
     Ok(())
 }
 
-fn resolve_p12_password(explicit: Option<String>, format: OutputFormat) -> Result<String> {
+fn resolve_p12_password(
+    explicit: Option<String>,
+    format: OutputFormat,
+) -> Result<Zeroizing<String>> {
     if !format.writes_p12() {
-        return Ok(explicit.unwrap_or_default());
+        return Ok(Zeroizing::new(explicit.unwrap_or_default()));
     }
     if let Some(password) = explicit {
-        return Ok(password);
+        return Ok(Zeroizing::new(password));
     }
 
-    let password = rpassword::prompt_password("PKCS#12 password: ")
-        .map_err(|e| KdError::Msg(format!("failed to read PKCS#12 password: {e}")))?;
+    let password = Zeroizing::new(
+        rpassword::prompt_password("PKCS#12 password: ")
+            .map_err(|e| KdError::Msg(format!("failed to read PKCS#12 password: {e}")))?,
+    );
     if password.is_empty() {
         return Err(KdError::Msg("PKCS#12 password must not be empty".into()));
     }
-    let confirmation = rpassword::prompt_password("Confirm PKCS#12 password: ")
-        .map_err(|e| KdError::Msg(format!("failed to confirm PKCS#12 password: {e}")))?;
+    let confirmation = Zeroizing::new(
+        rpassword::prompt_password("Confirm PKCS#12 password: ")
+            .map_err(|e| KdError::Msg(format!("failed to confirm PKCS#12 password: {e}")))?,
+    );
     if password != confirmation {
         return Err(KdError::Msg("PKCS#12 passwords do not match".into()));
     }
@@ -307,7 +320,7 @@ mod tests {
     #[test]
     fn explicit_p12_password_is_preserved() {
         let password = resolve_p12_password(Some("legacy".into()), OutputFormat::P12).unwrap();
-        assert_eq!(password, "legacy");
+        assert_eq!(password.as_str(), "legacy");
     }
 
     #[test]

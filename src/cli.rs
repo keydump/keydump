@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use zeroize::Zeroize;
 
 /// macOS Keychain private-key dump tool (authorized security assessment only).
 ///
@@ -14,7 +15,7 @@ use clap::{Parser, Subcommand};
 ///                    Debugging Restrictions block `task_for_pid` / memory read of securityd
 ///                    even as root. Does NOT require disabling SIP for file parsing
 ///                    itself — only for this memory-scan path.
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(
     name = "kd",
     version,
@@ -42,7 +43,7 @@ allows it, or supply --master-key obtained by other authorized means.
 For authorized red-team / security assessment only. Treat outputs as highly sensitive.
 ";
 
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 pub enum Command {
     /// List private keys and certificates (metadata; decrypt if credentials given)
     List(ListArgs),
@@ -50,13 +51,13 @@ pub enum Command {
     Export(ExportArgs),
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 pub struct ListArgs {
     #[command(flatten)]
     pub common: CommonArgs,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 pub struct ExportArgs {
     #[command(flatten)]
     pub common: CommonArgs,
@@ -86,7 +87,15 @@ pub struct ExportArgs {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Parser)]
+impl Drop for ExportArgs {
+    fn drop(&mut self) {
+        if let Some(password) = &mut self.p12_pass {
+            password.zeroize();
+        }
+    }
+}
+
+#[derive(Parser)]
 pub struct CommonArgs {
     /// Path to keychain file (default: ~/Library/Keychains/login.keychain-db)
     #[arg(short = 'f', long = "keychain")]
@@ -136,6 +145,17 @@ pub struct CommonArgs {
     /// Allow printing master/db key material to stderr (dangerous)
     #[arg(long, hide = true)]
     pub print_secrets: bool,
+}
+
+impl Drop for CommonArgs {
+    fn drop(&mut self) {
+        if let Some(password) = &mut self.password {
+            password.zeroize();
+        }
+        if let Some(master_key) = &mut self.master_key {
+            master_key.zeroize();
+        }
+    }
 }
 
 #[cfg(test)]
