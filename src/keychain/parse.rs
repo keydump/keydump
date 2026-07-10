@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::types::*;
@@ -203,6 +203,20 @@ impl KeychainFile {
                 recs.push(ro);
             }
             slot = slot_end;
+        }
+
+        let mut unique_offsets = HashSet::with_capacity(recs.len());
+        for &record_offset in &recs {
+            if (record_offset as usize) < slot {
+                return Err(KdError::InvalidKeychain(format!(
+                    "record offset {record_offset:#x} overlaps the index in table {table_id:#x}"
+                )));
+            }
+            if !unique_offsets.insert(record_offset) {
+                return Err(KdError::InvalidKeychain(format!(
+                    "duplicate record offset {record_offset:#x} in table {table_id:#x}"
+                )));
+            }
         }
         Ok((abs, recs))
     }
@@ -434,5 +448,36 @@ mod tests {
         };
 
         assert!(kc.private_keys().is_err());
+    }
+
+    #[test]
+    fn record_offsets_must_be_unique_and_follow_the_index() {
+        let table_id = CSSM_DL_DB_RECORD_PRIVATE_KEY;
+        for offsets in [&[TABLE_HEADER_SIZE as u32][..], &[64, 64][..]] {
+            let mut data = vec![0u8; 96];
+            put_u32(&mut data, 0, 96);
+            put_u32(&mut data, 8, offsets.len() as u32);
+            for (index, offset) in offsets.iter().enumerate() {
+                put_u32(&mut data, TABLE_HEADER_SIZE + index * ATOM_SIZE, *offset);
+            }
+            let mut by_id = HashMap::new();
+            by_id.insert(table_id, 0);
+            let kc = KeychainFile {
+                data,
+                tables: TableIndex {
+                    by_id,
+                    relative: HashMap::new(),
+                },
+                db_blob: DbBlob {
+                    start_crypto: 0,
+                    total_length: 0,
+                    salt: [0; 20],
+                    iv: [0; 8],
+                    base_offset: 0,
+                },
+            };
+
+            assert!(kc.private_keys().is_err());
+        }
     }
 }
