@@ -54,21 +54,26 @@ If `--from-securityd` fails under default SIP, use `--master-key` from another a
 out/
   keys/          # decrypted private keys (pem/der)
   certs/         # certificates
-  identities/    # modulus-matched cert+key (+ identity.p12)
+  identities/    # public-key-matched cert+key (+ identity.p12)
 ```
 
-Files are written mode `0600`, directories `0700`.
+The output path must not exist or must be an empty, non-symlink directory. `kd`
+builds the export in a private sibling staging directory and renames it into
+place only after every requested artifact succeeds. Files are created mode
+`0600`; directories are mode `0700`; existing files are never overwritten.
 
 When `p12` output is requested without `--p12-pass`, `KD_P12_PASS`, or
 `--p12-pass-file`, `kd` securely prompts for the password twice. Automation
-should use the environment variable or a protected file descriptor.
+should prefer a protected file or already-open file descriptor; direct flags
+and environment variables remain supported for compatibility but can be more
+widely observable on the host.
 
 ## How it works (short)
 
 1. Parse Apple `kych` tables (PrivateKey, X509, SymmetricKey, Metadata).
 2. Derive or recover **master key** → decrypt **DB wrapping key**.
 3. CMS-style 3DES unwrap of private key blobs (**does not check** `Extractable`).
-4. Match RSA moduli to certificates; optional PKCS#12.
+4. Match complete public keys to certificates (including RSA and EC); optional PKCS#12.
 
 `Extractable=0` only constrains Security.framework / `security export`. Offline (or memory-assisted) dump still recovers software-wrapped keys.
 
@@ -76,6 +81,8 @@ should use the environment variable or a protected file descriptor.
 
 - Authorized use only.
 - Outputs may include corporate MDM / NAC private keys — delete after the exercise.
+- Prefer `--password-file`, `--master-key-file`, and `--p12-pass-file` with
+  protected files or `/dev/fd/*` over placing secrets directly in command arguments.
 - Do not pass `--print-secrets` unless debugging in a controlled environment.
 
 ## Acknowledgments

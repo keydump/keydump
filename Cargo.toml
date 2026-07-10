@@ -28,7 +28,7 @@ thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# PKCS#12 + X.509 modulus match (system LibreSSL/OpenSSL via brew or Apple)
+# Vendored OpenSSL provides deterministic PKCS#12 and X.509 support on macOS.
 openssl = { version = "0.10", features = ["vendored"] }
 
 [profile.release]

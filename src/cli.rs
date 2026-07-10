@@ -64,7 +64,7 @@ pub struct ExportArgs {
     #[command(flatten)]
     pub common: CommonArgs,
 
-    /// Output directory (files created mode 0600 / dirs 0700)
+    /// Output directory (must be missing or empty; files mode 0600 / dirs 0700)
     #[arg(short = 'o', long, default_value = "./keys-dumped")]
     pub output: PathBuf,
 
