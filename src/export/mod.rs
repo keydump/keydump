@@ -275,7 +275,6 @@ impl StagingDir {
         match fs::symlink_metadata(target) {
             Ok(_) => {
                 validate_output_dir(target)?;
-                fs::remove_dir(target)?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
