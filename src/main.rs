@@ -233,7 +233,7 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
         args.include_exportable,
     )?;
     let identities = match_identities(&keys, &certs);
-    let format = OutputFormat::parse(&args.format)?;
+    let format = args.format;
     let p12_pass = resolve_p12_password(args.p12_pass.take(), format)?;
 
     let stats = export_all(&args.output, &keys, &certs, &identities, format, &p12_pass)?;

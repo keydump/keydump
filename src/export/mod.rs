@@ -5,6 +5,7 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::X509;
@@ -46,27 +47,16 @@ pub fn validate_output_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
     Pem,
     Der,
+    #[value(alias = "pkcs12")]
     P12,
     All,
 }
 
 impl OutputFormat {
-    pub fn parse(s: &str) -> Result<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "pem" => Ok(Self::Pem),
-            "der" => Ok(Self::Der),
-            "p12" | "pkcs12" => Ok(Self::P12),
-            "all" => Ok(Self::All),
-            other => Err(KdError::Msg(format!(
-                "unknown --format {other:?} (pem|der|p12|all)"
-            ))),
-        }
-    }
-
     pub fn writes_p12(self) -> bool {
         matches!(self, Self::P12 | Self::All)
     }

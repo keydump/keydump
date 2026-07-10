@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use zeroize::Zeroize;
 
+use crate::export::OutputFormat;
+
 /// macOS Keychain private-key dump tool (authorized security assessment only).
 ///
 /// Unlock paths:
@@ -68,14 +70,14 @@ pub struct ExportArgs {
 
     /// Output format: pem | der | p12 | all
     #[arg(long, default_value = "all")]
-    pub format: String,
+    pub format: OutputFormat,
 
     /// Password for PKCS#12 export
     #[arg(long, env = "KD_P12_PASS", hide_env_values = true)]
     pub p12_pass: Option<String>,
 
     /// Read the PKCS#12 password from a UTF-8 file (trailing newline removed)
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", conflicts_with = "p12_pass")]
     pub p12_pass_file: Option<PathBuf>,
 
     /// Also export keys that are already SecItem-exportable (default: non-exportable only)
@@ -102,7 +104,13 @@ pub struct CommonArgs {
     pub keychain: Option<PathBuf>,
 
     /// Keychain password (classic PBKDF2 path; may fail on macOS 26.x SEP-wrapped keychains)
-    #[arg(short = 'p', long, env = "KD_PASSWORD", hide_env_values = true)]
+    #[arg(
+        short = 'p',
+        long,
+        env = "KD_PASSWORD",
+        hide_env_values = true,
+        conflicts_with_all = ["master_key", "master_key_file", "from_securityd"]
+    )]
     pub password: Option<String>,
 
     /// Read the Keychain password from a UTF-8 file (trailing newline removed)
@@ -118,7 +126,8 @@ pub struct CommonArgs {
         short = 'k',
         long = "master-key",
         env = "KD_MASTER_KEY",
-        hide_env_values = true
+        hide_env_values = true,
+        conflicts_with_all = ["password", "password_file", "from_securityd"]
     )]
     pub master_key: Option<String>,
 
@@ -131,11 +140,18 @@ pub struct CommonArgs {
     pub master_key_file: Option<PathBuf>,
 
     /// Recover master key by scanning securityd memory (macOS, root, SIP-sensitive)
-    #[arg(long = "from-securityd")]
+    #[arg(
+        long = "from-securityd",
+        conflicts_with_all = ["password", "password_file", "master_key", "master_key_file"]
+    )]
     pub from_securityd: bool,
 
     /// PBKDF2 iteration count for --password (classic keychains use 1000)
-    #[arg(long, default_value_t = crate::crypto::DEFAULT_PBKDF2_ITERS)]
+    #[arg(
+        long,
+        default_value_t = crate::crypto::DEFAULT_PBKDF2_ITERS,
+        value_parser = clap::value_parser!(u32).range(1..=10_000_000)
+    )]
     pub pbkdf2_iters: u32,
 
     /// Verbose progress (never prints key material unless --print-secrets)
@@ -160,7 +176,7 @@ impl Drop for CommonArgs {
 
 #[cfg(test)]
 mod tests {
-    use clap::{Arg, Command, CommandFactory};
+    use clap::{Arg, Command, CommandFactory, Parser};
 
     use super::Cli;
 
@@ -183,5 +199,30 @@ mod tests {
             let arg = find_arg(&command, id).expect("secret argument exists");
             assert!(arg.is_hide_env_values_set(), "{id} must hide its env value");
         }
+    }
+
+    #[test]
+    fn unlock_sources_are_mutually_exclusive() {
+        let parsed = Cli::try_parse_from([
+            "kd",
+            "list",
+            "--password",
+            "secret",
+            "--master-key",
+            "00112233445566778899aabbccddeeff0011223344556677",
+        ]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn format_is_validated_by_clap() {
+        assert!(Cli::try_parse_from(["kd", "export", "--format", "invalid"]).is_err());
+        assert!(Cli::try_parse_from(["kd", "export", "--format", "pkcs12"]).is_ok());
+    }
+
+    #[test]
+    fn pbkdf2_iterations_must_be_in_safe_range() {
+        assert!(Cli::try_parse_from(["kd", "list", "--pbkdf2-iters", "0"]).is_err());
+        assert!(Cli::try_parse_from(["kd", "list", "--pbkdf2-iters", "10000001"]).is_err());
     }
 }
