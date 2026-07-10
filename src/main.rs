@@ -7,6 +7,7 @@ mod unlock;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use clap::Parser;
 use zeroize::{Zeroize, Zeroizing};
@@ -225,7 +226,7 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
     }
 
     let pks = kc.private_keys()?;
-    let mut certs = kc.certificates()?;
+    let mut certs: Vec<_> = kc.certificates()?.into_iter().map(Rc::new).collect();
     let mut keys = decrypt_all_keys(&unlocked, &pks, args.include_exportable)?;
     let mut identities = match_identities(&keys, &certs);
     if let Some(filter) = args.name.as_deref() {
@@ -249,7 +250,7 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
         };
         println!(
             "  identity: cert={:?} key={:?} ({tag})",
-            id.cert_name, id.key.print_name
+            id.cert.print_name, id.key.print_name
         );
     }
     Ok(())

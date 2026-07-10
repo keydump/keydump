@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use clap::ValueEnum;
 use openssl::pkey::PKey;
@@ -65,22 +66,19 @@ impl OutputFormat {
 pub struct DecryptedKey {
     pub print_name: String,
     pub extractable: u32,
-    pub key_size_bits: u32,
-    pub descriptive_data: Vec<u8>,
     pub der: Zeroizing<Vec<u8>>,
 }
 
 pub struct MatchedIdentity {
-    pub key: DecryptedKey,
-    pub cert_der: Vec<u8>,
-    pub cert_name: String,
+    pub key: Rc<DecryptedKey>,
+    pub cert: Rc<X509Record>,
 }
 
 pub fn decrypt_all_keys(
     unlocked: &Unlocked,
     records: &[PrivateKeyRecord],
     include_exportable: bool,
-) -> Result<Vec<DecryptedKey>> {
+) -> Result<Vec<Rc<DecryptedKey>>> {
     let mut out = Vec::new();
     for rec in records {
         // Default: only Extractable=0 (SecItem non-exportable software keys).
@@ -88,7 +86,7 @@ pub fn decrypt_all_keys(
             continue;
         }
         match unlocked.decrypt_private_key(rec) {
-            Ok((descriptive_data, der)) => {
+            Ok((_descriptive_data, der)) => {
                 // Validate parses as private key
                 if PKey::private_key_from_der(&der).is_err()
                     && Rsa::private_key_from_der(&der).is_err()
@@ -100,13 +98,11 @@ pub fn decrypt_all_keys(
                     );
                     continue;
                 }
-                out.push(DecryptedKey {
+                out.push(Rc::new(DecryptedKey {
                     print_name: rec.print_name.clone(),
                     extractable: rec.extractable,
-                    key_size_bits: rec.key_size_bits,
-                    descriptive_data,
                     der,
-                });
+                }));
             }
             Err(e) => {
                 eprintln!(
@@ -124,59 +120,51 @@ fn name_matches(name: &str, filter: &str) -> bool {
 }
 
 pub fn filter_by_name(
-    keys: &mut Vec<DecryptedKey>,
-    certs: &mut Vec<X509Record>,
+    keys: &mut Vec<Rc<DecryptedKey>>,
+    certs: &mut Vec<Rc<X509Record>>,
     identities: &mut Vec<MatchedIdentity>,
     filter: &str,
 ) {
     identities.retain(|identity| {
-        name_matches(&identity.key.print_name, filter) || name_matches(&identity.cert_name, filter)
+        name_matches(&identity.key.print_name, filter)
+            || name_matches(&identity.cert.print_name, filter)
     });
     keys.retain(|key| name_matches(&key.print_name, filter));
     certs.retain(|cert| name_matches(&cert.print_name, filter));
 }
 
-fn rsa_modulus_from_key_der(der: &[u8]) -> Option<Vec<u8>> {
-    if let Ok(rsa) = Rsa::private_key_from_der(der) {
-        return Some(rsa.n().to_vec());
-    }
-    if let Ok(pkey) = PKey::private_key_from_der(der) {
-        if let Ok(rsa) = pkey.rsa() {
-            return Some(rsa.n().to_vec());
-        }
-    }
-    None
+fn public_key_der_from_private(der: &[u8]) -> Option<Vec<u8>> {
+    let pkey = PKey::private_key_from_der(der)
+        .or_else(|_| Rsa::private_key_from_der(der).and_then(PKey::from_rsa))
+        .ok()?;
+    pkey.public_key_to_der().ok()
 }
 
-fn rsa_modulus_from_cert_der(der: &[u8]) -> Option<Vec<u8>> {
+fn public_key_der_from_certificate(der: &[u8]) -> Option<Vec<u8>> {
     let cert = X509::from_der(der).ok()?;
     let pkey = cert.public_key().ok()?;
-    let rsa = pkey.rsa().ok()?;
-    Some(rsa.n().to_vec())
+    pkey.public_key_to_der().ok()
 }
 
-pub fn match_identities(keys: &[DecryptedKey], certs: &[X509Record]) -> Vec<MatchedIdentity> {
+pub fn match_identities(
+    keys: &[Rc<DecryptedKey>],
+    certs: &[Rc<X509Record>],
+) -> Vec<MatchedIdentity> {
+    let cert_public_keys: Vec<_> = certs
+        .iter()
+        .map(|cert| public_key_der_from_certificate(&cert.der))
+        .collect();
     let mut out = Vec::new();
     for key in keys {
-        let Some(km) = rsa_modulus_from_key_der(&key.der) else {
+        let Some(key_public) = public_key_der_from_private(&key.der) else {
             continue;
         };
-        for cert in certs {
-            if let Some(cm) = rsa_modulus_from_cert_der(&cert.der) {
-                if cm == km {
-                    out.push(MatchedIdentity {
-                        key: DecryptedKey {
-                            print_name: key.print_name.clone(),
-                            extractable: key.extractable,
-                            key_size_bits: key.key_size_bits,
-                            descriptive_data: key.descriptive_data.clone(),
-                            der: key.der.clone(),
-                        },
-                        cert_der: cert.der.clone(),
-                        cert_name: cert.print_name.clone(),
-                    });
-                    break;
-                }
+        for (cert, cert_public) in certs.iter().zip(&cert_public_keys) {
+            if cert_public.as_ref() == Some(&key_public) {
+                out.push(MatchedIdentity {
+                    key: Rc::clone(key),
+                    cert: Rc::clone(cert),
+                });
             }
         }
     }
@@ -241,8 +229,8 @@ pub struct ExportStats {
 
 pub fn export_all(
     out_dir: &Path,
-    keys: &[DecryptedKey],
-    certs: &[X509Record],
+    keys: &[Rc<DecryptedKey>],
+    certs: &[Rc<X509Record>],
     identities: &[MatchedIdentity],
     format: OutputFormat,
     p12_pass: &str,
@@ -300,25 +288,25 @@ pub fn export_all(
     }
 
     for (i, id) in identities.iter().enumerate() {
-        let base = format!("{:02}_{}", i + 1, sanitize(&id.cert_name));
+        let base = format!("{:02}_{}", i + 1, sanitize(&id.cert.print_name));
         let folder = id_dir.join(&base);
         ensure_dir(&folder)?;
 
         if write_der {
             write_private(&folder.join("key.der"), &id.key.der)?;
-            write_private(&folder.join("cert.der"), &id.cert_der)?;
+            write_private(&folder.join("cert.der"), &id.cert.der)?;
         }
         if write_pem {
             if let Some(pem) = key_der_to_pem(&id.key.der) {
                 write_private(&folder.join("key.pem"), &pem)?;
             }
-            if let Ok(x) = X509::from_der(&id.cert_der) {
+            if let Ok(x) = X509::from_der(&id.cert.der) {
                 write_private(&folder.join("cert.pem"), &x.to_pem()?)?;
             }
         }
         if write_p12 {
             let p12_path = folder.join("identity.p12");
-            write_pkcs12(&id.key.der, &id.cert_der, p12_pass, &p12_path)?;
+            write_pkcs12(&id.key.der, &id.cert.der, p12_pass, &p12_path)?;
         }
         stats.identities_written += 1;
     }
@@ -371,6 +359,14 @@ fn dirs_next_home() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::BigNum;
+    use openssl::ec::{EcGroup, EcKey};
+    use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
+    use openssl::pkey::{PKey, Private};
+    use openssl::x509::{X509NameBuilder, X509};
 
     use super::*;
 
@@ -478,39 +474,35 @@ mod tests {
         assert_eq!(mode, 0o700);
     }
 
-    fn test_key(name: &str) -> DecryptedKey {
-        DecryptedKey {
+    fn test_key(name: &str) -> Rc<DecryptedKey> {
+        Rc::new(DecryptedKey {
             print_name: name.into(),
             extractable: 0,
-            key_size_bits: 2048,
-            descriptive_data: Vec::new(),
             der: Zeroizing::new(vec![1]),
-        }
+        })
     }
 
     #[test]
     fn name_filter_applies_to_keys_certs_and_either_identity_side() {
         let mut keys = vec![test_key("client key"), test_key("other key")];
         let mut certs = vec![
-            X509Record {
+            Rc::new(X509Record {
                 print_name: "CLIENT CERT".into(),
                 der: vec![2],
-            },
-            X509Record {
+            }),
+            Rc::new(X509Record {
                 print_name: "other cert".into(),
                 der: vec![3],
-            },
+            }),
         ];
         let mut identities = vec![
             MatchedIdentity {
                 key: test_key("unrelated key label"),
-                cert_der: vec![2],
-                cert_name: "CLIENT CERT".into(),
+                cert: Rc::clone(&certs[0]),
             },
             MatchedIdentity {
                 key: test_key("other key"),
-                cert_der: vec![3],
-                cert_name: "other cert".into(),
+                cert: Rc::clone(&certs[1]),
             },
         ];
 
@@ -519,6 +511,54 @@ mod tests {
         assert_eq!(keys.len(), 1);
         assert_eq!(certs.len(), 1);
         assert_eq!(identities.len(), 1);
-        assert_eq!(identities[0].cert_name, "CLIENT CERT");
+        assert_eq!(identities[0].cert.print_name, "CLIENT CERT");
+    }
+
+    fn certificate_for_key(key: &PKey<Private>) -> Vec<u8> {
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "keydump test").unwrap();
+        let name = name.build();
+        let serial = BigNum::from_u32(1).unwrap().to_asn1_integer().unwrap();
+        let not_before = Asn1Time::days_from_now(0).unwrap();
+        let not_after = Asn1Time::days_from_now(1).unwrap();
+        let mut builder = X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_serial_number(&serial).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(key).unwrap();
+        builder.set_not_before(&not_before).unwrap();
+        builder.set_not_after(&not_after).unwrap();
+        builder.sign(key, MessageDigest::sha256()).unwrap();
+        builder.build().to_der().unwrap()
+    }
+
+    #[test]
+    fn identity_matching_supports_ec_and_all_matching_certificates() {
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        let decrypted = Rc::new(DecryptedKey {
+            print_name: "EC key".into(),
+            extractable: 0,
+            der: Zeroizing::new(key.private_key_to_der().unwrap()),
+        });
+        let cert_der = certificate_for_key(&key);
+        let certs = vec![
+            Rc::new(X509Record {
+                print_name: "first".into(),
+                der: cert_der.clone(),
+            }),
+            Rc::new(X509Record {
+                print_name: "renewed".into(),
+                der: cert_der,
+            }),
+        ];
+
+        let identities = match_identities(&[Rc::clone(&decrypted)], &certs);
+
+        assert_eq!(identities.len(), 2);
+        assert!(identities
+            .iter()
+            .all(|identity| Rc::ptr_eq(&identity.key, &decrypted)));
     }
 }
