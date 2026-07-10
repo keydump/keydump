@@ -1,0 +1,321 @@
+//! Write decrypted keys/certs and match identities.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use openssl::pkey::PKey;
+use openssl::rsa::Rsa;
+use openssl::x509::X509;
+
+use crate::error::{KdError, Result};
+use crate::keychain::{PrivateKeyRecord, X509Record};
+use crate::unlock::Unlocked;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Pem,
+    Der,
+    P12,
+    All,
+}
+
+impl OutputFormat {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "pem" => Ok(Self::Pem),
+            "der" => Ok(Self::Der),
+            "p12" | "pkcs12" => Ok(Self::P12),
+            "all" => Ok(Self::All),
+            other => Err(KdError::Msg(format!(
+                "unknown --format {other:?} (pem|der|p12|all)"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DecryptedKey {
+    pub print_name: String,
+    pub extractable: u32,
+    pub key_size_bits: u32,
+    pub keyname: Vec<u8>,
+    pub der: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct MatchedIdentity {
+    pub key: DecryptedKey,
+    pub cert_der: Vec<u8>,
+    pub cert_name: String,
+}
+
+pub fn decrypt_all_keys(
+    unlocked: &Unlocked,
+    records: &[PrivateKeyRecord],
+    name_filter: Option<&str>,
+    include_exportable: bool,
+) -> Result<Vec<DecryptedKey>> {
+    let mut out = Vec::new();
+    for rec in records {
+        // Default: only Extractable=0 (SecItem non-exportable software keys).
+        if !include_exportable && rec.extractable != 0 {
+            continue;
+        }
+        if let Some(f) = name_filter {
+            if !rec
+                .print_name
+                .to_ascii_lowercase()
+                .contains(&f.to_ascii_lowercase())
+            {
+                continue;
+            }
+        }
+        match unlocked.decrypt_private_key(rec) {
+            Ok((keyname, der)) => {
+                // Validate parses as private key
+                if PKey::private_key_from_der(&der).is_err()
+                    && Rsa::private_key_from_der(&der).is_err()
+                {
+                    eprintln!(
+                        "warning: decrypted blob for {:?} is not a recognizable private key ({} bytes)",
+                        rec.print_name,
+                        der.len()
+                    );
+                    continue;
+                }
+                out.push(DecryptedKey {
+                    print_name: rec.print_name.clone(),
+                    extractable: rec.extractable,
+                    key_size_bits: rec.key_size_bits,
+                    keyname,
+                    der,
+                });
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to decrypt private key {:?}: {e}",
+                    rec.print_name
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn rsa_modulus_from_key_der(der: &[u8]) -> Option<Vec<u8>> {
+    if let Ok(rsa) = Rsa::private_key_from_der(der) {
+        return Some(rsa.n().to_vec());
+    }
+    if let Ok(pkey) = PKey::private_key_from_der(der) {
+        if let Ok(rsa) = pkey.rsa() {
+            return Some(rsa.n().to_vec());
+        }
+    }
+    None
+}
+
+fn rsa_modulus_from_cert_der(der: &[u8]) -> Option<Vec<u8>> {
+    let cert = X509::from_der(der).ok()?;
+    let pkey = cert.public_key().ok()?;
+    let rsa = pkey.rsa().ok()?;
+    Some(rsa.n().to_vec())
+}
+
+pub fn match_identities(keys: &[DecryptedKey], certs: &[X509Record]) -> Vec<MatchedIdentity> {
+    let mut out = Vec::new();
+    for key in keys {
+        let Some(km) = rsa_modulus_from_key_der(&key.der) else {
+            continue;
+        };
+        for cert in certs {
+            if let Some(cm) = rsa_modulus_from_cert_der(&cert.der) {
+                if cm == km {
+                    out.push(MatchedIdentity {
+                        key: DecryptedKey {
+                            print_name: key.print_name.clone(),
+                            extractable: key.extractable,
+                            key_size_bits: key.key_size_bits,
+                            keyname: key.keyname.clone(),
+                            der: key.der.clone(),
+                        },
+                        cert_der: cert.der.clone(),
+                        cert_name: cert.print_name.clone(),
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+fn sanitize(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let s = s.trim_matches('_').to_string();
+    if s.is_empty() {
+        "item".into()
+    } else {
+        s.chars().take(80).collect()
+    }
+}
+
+fn ensure_dir(p: &Path) -> Result<()> {
+    fs::create_dir_all(p)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+    fs::write(path, data)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+pub struct ExportStats {
+    pub keys_written: usize,
+    pub certs_written: usize,
+    pub identities_written: usize,
+}
+
+pub fn export_all(
+    out_dir: &Path,
+    keys: &[DecryptedKey],
+    certs: &[X509Record],
+    identities: &[MatchedIdentity],
+    format: OutputFormat,
+    p12_pass: &str,
+) -> Result<ExportStats> {
+    ensure_dir(out_dir)?;
+    let keys_dir = out_dir.join("keys");
+    let certs_dir = out_dir.join("certs");
+    let id_dir = out_dir.join("identities");
+    ensure_dir(&keys_dir)?;
+    ensure_dir(&certs_dir)?;
+    ensure_dir(&id_dir)?;
+
+    let mut stats = ExportStats {
+        keys_written: 0,
+        certs_written: 0,
+        identities_written: 0,
+    };
+
+    let write_der = matches!(format, OutputFormat::Der | OutputFormat::All);
+    let write_pem = matches!(format, OutputFormat::Pem | OutputFormat::All);
+    let write_p12 = matches!(format, OutputFormat::P12 | OutputFormat::All);
+
+    for (i, key) in keys.iter().enumerate() {
+        let tag = if key.extractable == 0 {
+            "nonexportable"
+        } else {
+            "exportable"
+        };
+        let base = format!("{:02}_{}_{}", i + 1, tag, sanitize(&key.print_name));
+        if write_der {
+            write_private(&keys_dir.join(format!("{base}.der")), &key.der)?;
+        }
+        if write_pem {
+            if let Some(pem) = key_der_to_pem(&key.der) {
+                write_private(&keys_dir.join(format!("{base}.pem")), &pem)?;
+            }
+        }
+        stats.keys_written += 1;
+    }
+
+    for (i, cert) in certs.iter().enumerate() {
+        let base = format!("{:02}_{}", i + 1, sanitize(&cert.print_name));
+        if write_der {
+            fs::write(certs_dir.join(format!("{base}.der")), &cert.der)?;
+        }
+        if write_pem {
+            if let Ok(x) = X509::from_der(&cert.der) {
+                let pem = x.to_pem()?;
+                fs::write(certs_dir.join(format!("{base}.pem")), pem)?;
+            }
+        }
+        stats.certs_written += 1;
+    }
+
+    for (i, id) in identities.iter().enumerate() {
+        let base = format!("{:02}_{}", i + 1, sanitize(&id.cert_name));
+        let folder = id_dir.join(&base);
+        ensure_dir(&folder)?;
+
+        if write_der {
+            write_private(&folder.join("key.der"), &id.key.der)?;
+            fs::write(folder.join("cert.der"), &id.cert_der)?;
+        }
+        if write_pem {
+            if let Some(pem) = key_der_to_pem(&id.key.der) {
+                write_private(&folder.join("key.pem"), &pem)?;
+            }
+            if let Ok(x) = X509::from_der(&id.cert_der) {
+                fs::write(folder.join("cert.pem"), x.to_pem()?)?;
+            }
+        }
+        if write_p12 {
+            let p12_path = folder.join("identity.p12");
+            write_pkcs12(&id.key.der, &id.cert_der, p12_pass, &p12_path)?;
+        }
+        stats.identities_written += 1;
+    }
+
+    Ok(stats)
+}
+
+fn key_der_to_pem(der: &[u8]) -> Option<Vec<u8>> {
+    if let Ok(rsa) = Rsa::private_key_from_der(der) {
+        return rsa.private_key_to_pem().ok();
+    }
+    if let Ok(pkey) = PKey::private_key_from_der(der) {
+        return pkey.private_key_to_pem_pkcs8().ok();
+    }
+    None
+}
+
+fn write_pkcs12(key_der: &[u8], cert_der: &[u8], pass: &str, path: &Path) -> Result<()> {
+    let pkey = PKey::private_key_from_der(key_der)
+        .or_else(|_| Rsa::private_key_from_der(key_der).and_then(PKey::from_rsa))
+        .map_err(|e| KdError::Msg(format!("p12 key parse: {e}")))?;
+    let cert =
+        X509::from_der(cert_der).map_err(|e| KdError::Msg(format!("p12 cert parse: {e}")))?;
+
+    // openssl crate Pkcs12 builder
+    let mut builder = openssl::pkcs12::Pkcs12::builder();
+    builder.name("keydump");
+    builder.pkey(&pkey);
+    builder.cert(&cert);
+    let p12 = builder
+        .build2(pass)
+        .map_err(|e| KdError::Msg(format!("p12 build: {e}")))?;
+    let der = p12
+        .to_der()
+        .map_err(|e| KdError::Msg(format!("p12 der: {e}")))?;
+    write_private(path, &der)
+}
+
+pub fn default_keychain_path() -> PathBuf {
+    dirs_next_home()
+        .map(|h| h.join("Library/Keychains/login.keychain-db"))
+        .unwrap_or_else(|| PathBuf::from("login.keychain-db"))
+}
+
+fn dirs_next_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}

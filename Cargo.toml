@@ -1,0 +1,31 @@
+[package]
+name = "keydump"
+version = "0.1.0"
+edition = "2021"
+description = "macOS Keychain private-key dump CLI (authorized security assessment)"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "kd"
+path = "src/main.rs"
+
+[dependencies]
+cbc = "0.1"
+cipher = "0.4"
+clap = { version = "4", features = ["derive", "env"] }
+des = "0.8"
+hex = "0.4"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = "0.10"
+thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# PKCS#12 + X.509 modulus match (system LibreSSL/OpenSSL via brew or Apple)
+openssl = { version = "0.10", features = ["vendored"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
