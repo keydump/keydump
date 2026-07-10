@@ -29,8 +29,8 @@ pub struct DbBlob {
 
 impl DbBlob {
     pub fn ciphertext<'a>(&self, file: &'a [u8]) -> Option<&'a [u8]> {
-        let start = self.base_offset + self.start_crypto as usize;
-        let end = self.base_offset + self.total_length as usize;
+        let start = self.base_offset.checked_add(self.start_crypto as usize)?;
+        let end = self.base_offset.checked_add(self.total_length as usize)?;
         file.get(start..end)
     }
 }
@@ -59,7 +59,7 @@ pub struct X509Record {
 
 #[derive(Debug)]
 pub struct TableIndex {
-    /// table_id -> absolute file offset of table start (header + offset from file start: HEADER_SIZE + rel)
+    /// table_id -> absolute file offset of table start.
     pub by_id: HashMap<u32, usize>,
     pub relative: HashMap<u32, u32>,
 }
