@@ -239,8 +239,11 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
 
     println!("export complete → {}", args.output.display());
     println!(
-        "  keys: {}  certs: {}  matched identities: {}",
-        stats.keys_written, stats.certs_written, stats.identities_written
+        "  key files: {}  cert files: {}  identity files: {}  matched identities: {}",
+        stats.key_files_written,
+        stats.cert_files_written,
+        stats.identity_files_written,
+        stats.identities_written
     );
     for id in &identities {
         let tag = if id.key.extractable == 0 {

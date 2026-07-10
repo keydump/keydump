@@ -85,32 +85,24 @@ pub fn decrypt_all_keys(
         if !include_exportable && rec.extractable != 0 {
             continue;
         }
-        match unlocked.decrypt_private_key(rec) {
-            Ok((_descriptive_data, der)) => {
-                // Validate parses as private key
-                if PKey::private_key_from_der(&der).is_err()
-                    && Rsa::private_key_from_der(&der).is_err()
-                {
-                    eprintln!(
-                        "warning: decrypted blob for {:?} is not a recognizable private key ({} bytes)",
-                        rec.print_name,
-                        der.len()
-                    );
-                    continue;
-                }
-                out.push(Rc::new(DecryptedKey {
-                    print_name: rec.print_name.clone(),
-                    extractable: rec.extractable,
-                    der,
-                }));
-            }
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to decrypt private key {:?}: {e}",
-                    rec.print_name
-                );
-            }
+        let (_descriptive_data, der) = unlocked.decrypt_private_key(rec).map_err(|e| {
+            KdError::Msg(format!(
+                "failed to decrypt private key {:?}: {e}",
+                rec.print_name
+            ))
+        })?;
+        if PKey::private_key_from_der(&der).is_err() && Rsa::private_key_from_der(&der).is_err() {
+            return Err(KdError::Crypto(format!(
+                "decrypted blob for {:?} is not a recognizable private key ({} bytes)",
+                rec.print_name,
+                der.len()
+            )));
         }
+        out.push(Rc::new(DecryptedKey {
+            print_name: rec.print_name.clone(),
+            extractable: rec.extractable,
+            der,
+        }));
     }
     Ok(out)
 }
@@ -222,8 +214,9 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
 }
 
 pub struct ExportStats {
-    pub keys_written: usize,
-    pub certs_written: usize,
+    pub key_files_written: usize,
+    pub cert_files_written: usize,
+    pub identity_files_written: usize,
     pub identities_written: usize,
 }
 
@@ -246,8 +239,9 @@ pub fn export_all(
     ensure_dir(&id_dir)?;
 
     let mut stats = ExportStats {
-        keys_written: 0,
-        certs_written: 0,
+        key_files_written: 0,
+        cert_files_written: 0,
+        identity_files_written: 0,
         identities_written: 0,
     };
 
@@ -264,27 +258,27 @@ pub fn export_all(
         let base = format!("{:02}_{}_{}", i + 1, tag, sanitize(&key.print_name));
         if write_der {
             write_private(&keys_dir.join(format!("{base}.der")), &key.der)?;
+            stats.key_files_written += 1;
         }
         if write_pem {
-            if let Some(pem) = key_der_to_pem(&key.der) {
-                write_private(&keys_dir.join(format!("{base}.pem")), &pem)?;
-            }
+            let pem = key_der_to_pem(&key.der)?;
+            write_private(&keys_dir.join(format!("{base}.pem")), &pem)?;
+            stats.key_files_written += 1;
         }
-        stats.keys_written += 1;
     }
 
     for (i, cert) in certs.iter().enumerate() {
         let base = format!("{:02}_{}", i + 1, sanitize(&cert.print_name));
         if write_der {
             write_private(&certs_dir.join(format!("{base}.der")), &cert.der)?;
+            stats.cert_files_written += 1;
         }
         if write_pem {
-            if let Ok(x) = X509::from_der(&cert.der) {
-                let pem = x.to_pem()?;
-                write_private(&certs_dir.join(format!("{base}.pem")), &pem)?;
-            }
+            let x = X509::from_der(&cert.der)?;
+            let pem = x.to_pem()?;
+            write_private(&certs_dir.join(format!("{base}.pem")), &pem)?;
+            stats.cert_files_written += 1;
         }
-        stats.certs_written += 1;
     }
 
     for (i, id) in identities.iter().enumerate() {
@@ -295,18 +289,19 @@ pub fn export_all(
         if write_der {
             write_private(&folder.join("key.der"), &id.key.der)?;
             write_private(&folder.join("cert.der"), &id.cert.der)?;
+            stats.identity_files_written += 2;
         }
         if write_pem {
-            if let Some(pem) = key_der_to_pem(&id.key.der) {
-                write_private(&folder.join("key.pem"), &pem)?;
-            }
-            if let Ok(x) = X509::from_der(&id.cert.der) {
-                write_private(&folder.join("cert.pem"), &x.to_pem()?)?;
-            }
+            let pem = key_der_to_pem(&id.key.der)?;
+            write_private(&folder.join("key.pem"), &pem)?;
+            let x = X509::from_der(&id.cert.der)?;
+            write_private(&folder.join("cert.pem"), &x.to_pem()?)?;
+            stats.identity_files_written += 2;
         }
         if write_p12 {
             let p12_path = folder.join("identity.p12");
             write_pkcs12(&id.key.der, &id.cert.der, p12_pass, &p12_path)?;
+            stats.identity_files_written += 1;
         }
         stats.identities_written += 1;
     }
@@ -314,14 +309,13 @@ pub fn export_all(
     Ok(stats)
 }
 
-fn key_der_to_pem(der: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+fn key_der_to_pem(der: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     if let Ok(rsa) = Rsa::private_key_from_der(der) {
-        return rsa.private_key_to_pem().ok().map(Zeroizing::new);
+        return Ok(Zeroizing::new(rsa.private_key_to_pem()?));
     }
-    if let Ok(pkey) = PKey::private_key_from_der(der) {
-        return pkey.private_key_to_pem_pkcs8().ok().map(Zeroizing::new);
-    }
-    None
+    let pkey = PKey::private_key_from_der(der)
+        .map_err(|e| KdError::Crypto(format!("private key DER parse failed: {e}")))?;
+    Ok(Zeroizing::new(pkey.private_key_to_pem_pkcs8()?))
 }
 
 fn write_pkcs12(key_der: &[u8], cert_der: &[u8], pass: &str, path: &Path) -> Result<()> {
@@ -560,5 +554,42 @@ mod tests {
         assert!(identities
             .iter()
             .all(|identity| Rc::ptr_eq(&identity.key, &decrypted)));
+    }
+
+    #[test]
+    fn p12_only_stats_count_only_files_actually_written() {
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        let decrypted = Rc::new(DecryptedKey {
+            print_name: "EC key".into(),
+            extractable: 0,
+            der: Zeroizing::new(key.private_key_to_der().unwrap()),
+        });
+        let cert = Rc::new(X509Record {
+            print_name: "EC cert".into(),
+            der: certificate_for_key(&key),
+        });
+        let keys = vec![Rc::clone(&decrypted)];
+        let certs = vec![Rc::clone(&cert)];
+        let identities = vec![MatchedIdentity {
+            key: decrypted,
+            cert,
+        }];
+        let root = TestDir::new();
+
+        let stats = export_all(
+            &root.0,
+            &keys,
+            &certs,
+            &identities,
+            OutputFormat::P12,
+            "test password",
+        )
+        .unwrap();
+
+        assert_eq!(stats.key_files_written, 0);
+        assert_eq!(stats.cert_files_written, 0);
+        assert_eq!(stats.identity_files_written, 1);
+        assert_eq!(stats.identities_written, 1);
     }
 }
