@@ -2,9 +2,13 @@
 name = "keydump"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 description = "macOS Keychain private-key dump CLI (authorized security assessment)"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/keydump/keydump"
+homepage = "https://github.com/keydump/keydump"
+publish = false
 
 [[bin]]
 name = "kd"

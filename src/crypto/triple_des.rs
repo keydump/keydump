@@ -21,7 +21,7 @@ pub fn des3_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Zero
             iv.len()
         )));
     }
-    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(8) {
+    if ciphertext.is_empty() || ciphertext.len() % 8 != 0 {
         return Err(KdError::Crypto(
             "ciphertext empty or not 8-byte aligned".into(),
         ));
