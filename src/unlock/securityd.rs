@@ -10,12 +10,10 @@ use std::process::Command;
 
 use zeroize::Zeroizing;
 
-use super::Unlocked;
-use crate::crypto::{
-    decrypt_db_key, private_key_decrypt, symmetric_keyblob_decrypt, MASTER_KEY_LEN,
-};
+use super::{DbKeyValidator, Unlocked};
+use crate::crypto::{decrypt_db_key, MASTER_KEY_LEN};
 use crate::error::{KdError, Result};
-use crate::keychain::{KeychainFile, PrivateKeyRecord, SymKeyBlob};
+use crate::keychain::KeychainFile;
 
 const DB_KEY_LEN: usize = 24;
 
@@ -119,35 +117,6 @@ fn malloc_regions(pid: i32) -> Result<Vec<(u64, u64)>> {
     Ok(regions)
 }
 
-fn pk_looks_good(db_key: &[u8], p: &PrivateKeyRecord) -> bool {
-    match private_key_decrypt(db_key, &p.iv, &p.encrypted) {
-        Ok((_, der)) => der.first() == Some(&0x30) && der.len() > 64,
-        Err(_) => false,
-    }
-}
-
-fn db_key_valid(db_key: &[u8], blobs: &[SymKeyBlob], privkeys: &[PrivateKeyRecord]) -> bool {
-    let mut sym_ok = blobs.is_empty();
-    for b in blobs.iter().take(12) {
-        if symmetric_keyblob_decrypt(db_key, &b.iv, &b.ciphertext).is_ok() {
-            sym_ok = true;
-            break;
-        }
-    }
-    if !sym_ok {
-        return false;
-    }
-    if privkeys.is_empty() {
-        return true;
-    }
-    for p in privkeys.iter().take(6) {
-        if pk_looks_good(db_key, p) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Scan securityd MALLOC heaps for DB wrapping key (preferred) or master key.
 pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
     require_root()?;
@@ -158,13 +127,7 @@ pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
         .ciphertext(&kc.data)
         .ok_or_else(|| KdError::InvalidKeychain("DBBlob ciphertext oob".into()))?;
     let iv = kc.db_blob.iv;
-    let blobs = kc.symmetric_keyblobs().unwrap_or_default();
-    let privkeys = kc.private_keys().unwrap_or_default();
-    if blobs.is_empty() && privkeys.is_empty() {
-        return Err(KdError::Securityd(
-            "no key material in keychain to validate memory candidates".into(),
-        ));
-    }
+    let validator = DbKeyValidator::from_keychain(kc)?;
 
     let mut task: u32 = 0;
     let kr = unsafe { task_for_pid(mach_task_self(), pid, &mut task) };
@@ -183,7 +146,7 @@ pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
 
     for (start, end) in &regions {
         let size = end - start;
-        if let Some(hit) = scan_region(task, *start, size, &iv, ct, &blobs, &privkeys) {
+        if let Some(hit) = scan_region(task, *start, size, &iv, ct, &validator) {
             return Ok(hit);
         }
         scanned = scanned.saturating_add(size);
@@ -204,8 +167,7 @@ fn scan_region(
     size: u64,
     db_iv: &[u8; 8],
     db_ct: &[u8],
-    blobs: &[SymKeyBlob],
-    privkeys: &[PrivateKeyRecord],
+    validator: &DbKeyValidator,
 ) -> Option<Unlocked> {
     let mut data_ptr: usize = 0;
     let mut data_cnt: u32 = 0;
@@ -219,7 +181,7 @@ fn scan_region(
     let mut off = 0usize;
     while off + DB_KEY_LEN <= mem.len() {
         let cand = &mem[off..off + DB_KEY_LEN];
-        if entropy_ok(cand) && db_key_valid(cand, blobs, privkeys) {
+        if entropy_ok(cand) && validator.validates(cand) {
             let db_key = Zeroizing::new(cand.to_vec());
             unsafe {
                 let _ = vm_deallocate(mach_task_self(), data_ptr, data_cnt as usize);
@@ -239,7 +201,7 @@ fn scan_region(
         let master = &mem[off..off + MASTER_KEY_LEN];
         if entropy_ok(master) {
             if let Ok(db_key) = decrypt_db_key(master, db_iv, db_ct) {
-                if db_key_valid(&db_key, blobs, privkeys) {
+                if validator.validates(&db_key) {
                     let master_z = Zeroizing::new(master.to_vec());
                     unsafe {
                         let _ = vm_deallocate(mach_task_self(), data_ptr, data_cnt as usize);
