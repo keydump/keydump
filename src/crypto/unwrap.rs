@@ -53,7 +53,7 @@ pub fn symmetric_keyblob_decrypt(
 /// byte-reversed, then stage-2 uses the record IV. Stage-2 plaintext is a fixed
 /// 12-byte descriptive prefix followed by the private-key DER.
 ///
-/// Returns `(keyname_12_bytes, key_der_bytes)`.
+/// Returns `(descriptive_data, key_der_bytes)`.
 pub fn private_key_decrypt(
     db_key: &[u8],
     record_iv: &[u8],
@@ -65,13 +65,52 @@ pub fn private_key_decrypt(
     }
     let rev = Zeroizing::new(plain.iter().rev().copied().collect::<Vec<_>>());
     let final_plain = des3_cbc_decrypt(db_key, record_iv, &rev)?;
-    if final_plain.len() < 12 {
+    split_private_key_plaintext(&final_plain)
+}
+
+fn split_private_key_plaintext(plaintext: &[u8]) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
+    if plaintext.len() < 4 {
         return Err(KdError::Crypto("private key stage2 too short".into()));
     }
-    let keyname = final_plain[..12].to_vec();
-    let keyblob = Zeroizing::new(final_plain[12..].to_vec());
+    let description_len =
+        u32::from_be_bytes([plaintext[0], plaintext[1], plaintext[2], plaintext[3]]) as usize;
+    let key_start = 4usize
+        .checked_add(description_len)
+        .ok_or_else(|| KdError::Crypto("private key description length overflow".into()))?;
+    if key_start > plaintext.len() {
+        return Err(KdError::Crypto(format!(
+            "private key description length {description_len} exceeds plaintext"
+        )));
+    }
+    let descriptive_data = plaintext[4..key_start].to_vec();
+    let keyblob = Zeroizing::new(plaintext[key_start..].to_vec());
     if keyblob.is_empty() {
         return Err(KdError::Crypto("private key material empty".into()));
     }
-    Ok((keyname, keyblob))
+    Ok((descriptive_data, keyblob))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_private_key_plaintext;
+
+    #[test]
+    fn private_key_plaintext_supports_variable_description_length() {
+        let mut plaintext = 3u32.to_be_bytes().to_vec();
+        plaintext.extend_from_slice(b"tag");
+        plaintext.extend_from_slice(b"private-key-der");
+
+        let (description, key) = split_private_key_plaintext(&plaintext).unwrap();
+
+        assert_eq!(description, b"tag");
+        assert_eq!(&key[..], b"private-key-der");
+    }
+
+    #[test]
+    fn private_key_plaintext_rejects_description_beyond_buffer() {
+        let mut plaintext = 32u32.to_be_bytes().to_vec();
+        plaintext.extend_from_slice(b"short");
+
+        assert!(split_private_key_plaintext(&plaintext).is_err());
+    }
 }

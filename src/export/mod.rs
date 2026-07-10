@@ -66,7 +66,7 @@ pub struct DecryptedKey {
     pub print_name: String,
     pub extractable: u32,
     pub key_size_bits: u32,
-    pub keyname: Vec<u8>,
+    pub descriptive_data: Vec<u8>,
     pub der: Zeroizing<Vec<u8>>,
 }
 
@@ -98,7 +98,7 @@ pub fn decrypt_all_keys(
             }
         }
         match unlocked.decrypt_private_key(rec) {
-            Ok((keyname, der)) => {
+            Ok((descriptive_data, der)) => {
                 // Validate parses as private key
                 if PKey::private_key_from_der(&der).is_err()
                     && Rsa::private_key_from_der(&der).is_err()
@@ -114,7 +114,7 @@ pub fn decrypt_all_keys(
                     print_name: rec.print_name.clone(),
                     extractable: rec.extractable,
                     key_size_bits: rec.key_size_bits,
-                    keyname,
+                    descriptive_data,
                     der,
                 });
             }
@@ -162,7 +162,7 @@ pub fn match_identities(keys: &[DecryptedKey], certs: &[X509Record]) -> Vec<Matc
                             print_name: key.print_name.clone(),
                             extractable: key.extractable,
                             key_size_bits: key.key_size_bits,
-                            keyname: key.keyname.clone(),
+                            descriptive_data: key.descriptive_data.clone(),
                             der: key.der.clone(),
                         },
                         cert_der: cert.der.clone(),
