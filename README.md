@@ -59,6 +59,10 @@ out/
 
 Files are written mode `0600`, directories `0700`.
 
+When `p12` output is requested without `--p12-pass`, `KD_P12_PASS`, or
+`--p12-pass-file`, `kd` securely prompts for the password twice. Automation
+should use the environment variable or a protected file descriptor.
+
 ## How it works (short)
 
 1. Parse Apple `kych` tables (PrivateKey, X509, SymmetricKey, Metadata).

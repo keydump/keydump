@@ -53,7 +53,7 @@ fn run() -> Result<()> {
         Command::Export(mut a) => {
             resolve_common_secret_files(&mut a.common)?;
             if let Some(path) = a.p12_pass_file.take() {
-                a.p12_pass = read_secret_file(&path, "PKCS#12 password")?;
+                a.p12_pass = Some(read_secret_file(&path, "PKCS#12 password")?);
             }
             cmd_export(a)
         }
@@ -228,15 +228,9 @@ fn cmd_export(args: cli::ExportArgs) -> Result<()> {
     )?;
     let identities = match_identities(&keys, &certs);
     let format = OutputFormat::parse(&args.format)?;
+    let p12_pass = resolve_p12_password(args.p12_pass, format)?;
 
-    let stats = export_all(
-        &args.output,
-        &keys,
-        &certs,
-        &identities,
-        format,
-        &args.p12_pass,
-    )?;
+    let stats = export_all(&args.output, &keys, &certs, &identities, format, &p12_pass)?;
 
     println!("export complete → {}", args.output.display());
     println!(
@@ -255,6 +249,27 @@ fn cmd_export(args: cli::ExportArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn resolve_p12_password(explicit: Option<String>, format: OutputFormat) -> Result<String> {
+    if !format.writes_p12() {
+        return Ok(explicit.unwrap_or_default());
+    }
+    if let Some(password) = explicit {
+        return Ok(password);
+    }
+
+    let password = rpassword::prompt_password("PKCS#12 password: ")
+        .map_err(|e| KdError::Msg(format!("failed to read PKCS#12 password: {e}")))?;
+    if password.is_empty() {
+        return Err(KdError::Msg("PKCS#12 password must not be empty".into()));
+    }
+    let confirmation = rpassword::prompt_password("Confirm PKCS#12 password: ")
+        .map_err(|e| KdError::Msg(format!("failed to confirm PKCS#12 password: {e}")))?;
+    if password != confirmation {
+        return Err(KdError::Msg("PKCS#12 passwords do not match".into()));
+    }
+    Ok(password)
 }
 
 #[cfg(test)]
@@ -287,5 +302,17 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn explicit_p12_password_is_preserved() {
+        let password = resolve_p12_password(Some("legacy".into()), OutputFormat::P12).unwrap();
+        assert_eq!(password, "legacy");
+    }
+
+    #[test]
+    fn non_p12_export_does_not_require_password() {
+        let password = resolve_p12_password(None, OutputFormat::Pem).unwrap();
+        assert!(password.is_empty());
     }
 }

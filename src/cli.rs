@@ -70,13 +70,8 @@ pub struct ExportArgs {
     pub format: String,
 
     /// Password for PKCS#12 export
-    #[arg(
-        long,
-        default_value = "export",
-        env = "KD_P12_PASS",
-        hide_env_values = true
-    )]
-    pub p12_pass: String,
+    #[arg(long, env = "KD_P12_PASS", hide_env_values = true)]
+    pub p12_pass: Option<String>,
 
     /// Read the PKCS#12 password from a UTF-8 file (trailing newline removed)
     #[arg(long, value_name = "PATH")]

@@ -65,6 +65,10 @@ impl OutputFormat {
             ))),
         }
     }
+
+    pub fn writes_p12(self) -> bool {
+        matches!(self, Self::P12 | Self::All)
+    }
 }
 
 #[derive(Debug)]
