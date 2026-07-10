@@ -29,22 +29,32 @@ pub fn symmetric_keyblob_decrypt(
     encrypted: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
     let plain = des3_cbc_decrypt(db_key, &MAGIC_CMS_IV, encrypted)?;
-    if plain.len() < 32 {
-        return Err(KdError::Crypto("sym keyblob stage1 too short".into()));
+    if plain.len() != 40 {
+        return Err(KdError::Crypto(format!(
+            "sym keyblob stage1 must be 40 bytes, got {}",
+            plain.len()
+        )));
     }
     let mut rev = Zeroizing::new([0u8; 32]);
     for i in 0..32 {
         rev[i] = plain[31 - i];
     }
     let final_plain = des3_cbc_decrypt(db_key, record_iv, &rev[..])?;
-    if final_plain.len() < 4 + DB_KEY_LEN {
-        return Err(KdError::Crypto("sym keyblob stage2 too short".into()));
+    extract_symmetric_key_plaintext(&final_plain)
+}
+
+fn extract_symmetric_key_plaintext(plaintext: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    if plaintext.len() != 4 + DB_KEY_LEN {
+        return Err(KdError::Crypto(format!(
+            "sym keyblob stage2 must be {} bytes, got {}",
+            4 + DB_KEY_LEN,
+            plaintext.len()
+        )));
     }
-    let key = &final_plain[4..4 + DB_KEY_LEN];
-    if key.len() != DB_KEY_LEN {
-        return Err(KdError::Crypto("bad unwrapped sym key length".into()));
+    if plaintext[..4] != [0, 0, 0, 0] {
+        return Err(KdError::Crypto("sym keyblob header is not zero".into()));
     }
-    Ok(Zeroizing::new(key.to_vec()))
+    Ok(Zeroizing::new(plaintext[4..].to_vec()))
 }
 
 /// Decrypt private-key material from a file-based keychain key blob.
@@ -92,7 +102,20 @@ fn split_private_key_plaintext(plaintext: &[u8]) -> Result<(Vec<u8>, Zeroizing<V
 
 #[cfg(test)]
 mod tests {
-    use super::split_private_key_plaintext;
+    use super::{extract_symmetric_key_plaintext, split_private_key_plaintext, DB_KEY_LEN};
+
+    #[test]
+    fn symmetric_key_plaintext_requires_exact_header_and_length() {
+        let mut plaintext = vec![0u8; 4 + DB_KEY_LEN];
+        plaintext[4..].fill(0x5a);
+
+        let key = extract_symmetric_key_plaintext(&plaintext).unwrap();
+        assert_eq!(&key[..], &[0x5a; DB_KEY_LEN]);
+
+        plaintext[0] = 1;
+        assert!(extract_symmetric_key_plaintext(&plaintext).is_err());
+        assert!(extract_symmetric_key_plaintext(&plaintext[..plaintext.len() - 1]).is_err());
+    }
 
     #[test]
     fn private_key_plaintext_supports_variable_description_length() {
