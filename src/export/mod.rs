@@ -5,6 +5,8 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::ValueEnum;
 use openssl::pkey::PKey;
@@ -15,6 +17,8 @@ use zeroize::Zeroizing;
 use crate::error::{KdError, Result};
 use crate::keychain::{PrivateKeyRecord, X509Record};
 use crate::unlock::Unlocked;
+
+static NEXT_STAGING_DIR: AtomicU64 = AtomicU64::new(0);
 
 /// Reject output paths that could mix a new export with existing data.
 ///
@@ -213,6 +217,83 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+struct StagingDir {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl StagingDir {
+    fn new(target: &Path) -> Result<Self> {
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut parent_builder = fs::DirBuilder::new();
+        parent_builder.recursive(true).mode(0o700);
+        parent_builder.create(parent)?;
+        let metadata = fs::symlink_metadata(parent)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(KdError::Msg(format!(
+                "output parent is not a real directory: {}",
+                parent.display()
+            )));
+        }
+
+        let target_name = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("keydump");
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        for attempt in 0..100u64 {
+            let sequence = NEXT_STAGING_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!(
+                ".{target_name}.kd-stage-{}-{nonce}-{sequence}-{attempt}",
+                std::process::id()
+            ));
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            match builder.create(&path) {
+                Ok(()) => {
+                    return Ok(Self {
+                        path,
+                        committed: false,
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(KdError::Msg(
+            "could not create a unique export staging directory".into(),
+        ))
+    }
+
+    fn commit(mut self, target: &Path) -> Result<()> {
+        match fs::symlink_metadata(target) {
+            Ok(_) => {
+                validate_output_dir(target)?;
+                fs::remove_dir(target)?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        fs::rename(&self.path, target)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 pub struct ExportStats {
     pub key_files_written: usize,
     pub cert_files_written: usize,
@@ -230,6 +311,20 @@ pub fn export_all(
 ) -> Result<ExportStats> {
     // Re-check at the write seam so library callers cannot bypass the CLI guard.
     validate_output_dir(out_dir)?;
+    let staging = StagingDir::new(out_dir)?;
+    let stats = export_into(&staging.path, keys, certs, identities, format, p12_pass)?;
+    staging.commit(out_dir)?;
+    Ok(stats)
+}
+
+fn export_into(
+    out_dir: &Path,
+    keys: &[Rc<DecryptedKey>],
+    certs: &[Rc<X509Record>],
+    identities: &[MatchedIdentity],
+    format: OutputFormat,
+    p12_pass: &str,
+) -> Result<ExportStats> {
     ensure_dir(out_dir)?;
     let keys_dir = out_dir.join("keys");
     let certs_dir = out_dir.join("certs");
@@ -591,5 +686,26 @@ mod tests {
         assert_eq!(stats.cert_files_written, 0);
         assert_eq!(stats.identity_files_written, 1);
         assert_eq!(stats.identities_written, 1);
+    }
+
+    #[test]
+    fn failed_export_removes_staging_and_preserves_empty_target() {
+        let parent = TestDir::new();
+        let target = parent.0.join("output");
+        fs::create_dir(&target).unwrap();
+        let certs = vec![Rc::new(X509Record {
+            print_name: "invalid".into(),
+            der: vec![0xff],
+        })];
+
+        let result = export_all(&target, &[], &certs, &[], OutputFormat::Pem, "unused");
+
+        assert!(result.is_err());
+        assert!(fs::read_dir(&target).unwrap().next().is_none());
+        let siblings: Vec<_> = fs::read_dir(&parent.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(siblings, vec![target.file_name().unwrap()]);
     }
 }
