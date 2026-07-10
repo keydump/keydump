@@ -52,14 +52,18 @@ fn run() -> Result<()> {
             resolve_common_secret_files(&mut a.common)?;
             cmd_list(a.common)
         }
-        Command::Export(mut a) => {
-            resolve_common_secret_files(&mut a.common)?;
-            if let Some(path) = a.p12_pass_file.take() {
-                a.p12_pass = Some(read_secret_file(&path, "PKCS#12 password")?);
-            }
-            cmd_export(a)
-        }
+        Command::Export(a) => cmd_export(resolve_export_inputs(a)?),
     }
+}
+
+fn resolve_export_inputs(mut args: cli::ExportArgs) -> Result<cli::ExportArgs> {
+    // Reject an unsafe destination before reading any credential material.
+    validate_output_dir(&args.output)?;
+    resolve_common_secret_files(&mut args.common)?;
+    if let Some(path) = args.p12_pass_file.take() {
+        args.p12_pass = Some(read_secret_file(&path, "PKCS#12 password")?);
+    }
+    Ok(args)
 }
 
 fn read_secret_file(path: &Path, label: &str) -> Result<String> {
@@ -317,6 +321,37 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn output_is_preflighted_before_secret_files_are_read() {
+        let id = NEXT_SECRET_FILE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("kd-preflight-{}-{id}", std::process::id()));
+        let output = root.join("output");
+        let missing_secret = root.join("missing-secret");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("existing"), b"do not overwrite").unwrap();
+
+        let cli = Cli::try_parse_from([
+            "kd",
+            "export",
+            "--output",
+            output.to_str().unwrap(),
+            "--password-file",
+            missing_secret.to_str().unwrap(),
+        ])
+        .unwrap();
+        let Command::Export(args) = cli.cmd else {
+            unreachable!();
+        };
+        let error = match resolve_export_inputs(args) {
+            Ok(_) => panic!("non-empty output must be rejected"),
+            Err(error) => error.to_string(),
+        };
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(error.contains("output directory must be empty"));
+        assert!(!error.contains("missing-secret"));
     }
 
     #[test]
