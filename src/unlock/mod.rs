@@ -74,11 +74,7 @@ impl DbKeyValidator {
 
 impl Unlocked {
     pub fn from_master_key(kc: &KeychainFile, master: &[u8]) -> Result<Self> {
-        let ct = kc
-            .db_blob
-            .ciphertext(&kc.data)
-            .ok_or_else(|| KdError::InvalidKeychain("DBBlob ciphertext oob".into()))?;
-        let db_key = decrypt_db_key(master, &kc.db_blob.iv, ct)?;
+        let db_key = decrypt_db_key(master, kc.database_iv(), kc.database_ciphertext()?)?;
         let validator = DbKeyValidator::from_keychain(kc)?;
         if !validator.validates(&db_key) {
             return Err(KdError::WrongCredential);

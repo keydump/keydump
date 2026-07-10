@@ -50,9 +50,9 @@ fn read_int_attr(data: &[u8], base: usize, col: u32) -> Result<u32> {
 }
 
 pub struct KeychainFile {
-    pub data: Vec<u8>,
-    pub tables: TableIndex,
-    pub db_blob: DbBlob,
+    data: Vec<u8>,
+    tables: TableIndex,
+    db_blob: DbBlob,
 }
 
 impl KeychainFile {
@@ -137,6 +137,24 @@ impl KeychainFile {
 
     pub fn blob_version(&self) -> u32 {
         be_u32(&self.data, self.db_blob.base_offset + 4).unwrap_or(0)
+    }
+
+    pub fn file_len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn database_salt(&self) -> &[u8; 20] {
+        &self.db_blob.salt
+    }
+
+    pub fn database_iv(&self) -> &[u8; 8] {
+        &self.db_blob.iv
+    }
+
+    pub fn database_ciphertext(&self) -> Result<&[u8]> {
+        self.db_blob
+            .ciphertext(&self.data)
+            .ok_or_else(|| KdError::InvalidKeychain("DBBlob ciphertext oob".into()))
     }
 
     fn table_records(&self, table_id: u32) -> Result<(usize, Vec<u32>)> {

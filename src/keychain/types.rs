@@ -18,17 +18,17 @@ pub const KEY_BLOB_REC_HEADER_SIZE: usize = 0x84; // 4+4+0x7C
 pub const KEY_BLOB_COMMON_SIZE: usize = 24; // magic+ver+start+total+iv(8)
 
 #[derive(Debug, Clone)]
-pub struct DbBlob {
-    pub start_crypto: u32,
-    pub total_length: u32,
-    pub salt: [u8; 20],
-    pub iv: [u8; 8],
+pub(super) struct DbBlob {
+    pub(super) start_crypto: u32,
+    pub(super) total_length: u32,
+    pub(super) salt: [u8; 20],
+    pub(super) iv: [u8; 8],
     /// Absolute file offset of the DBBlob structure start.
-    pub base_offset: usize,
+    pub(super) base_offset: usize,
 }
 
 impl DbBlob {
-    pub fn ciphertext<'a>(&self, file: &'a [u8]) -> Option<&'a [u8]> {
+    pub(super) fn ciphertext<'a>(&self, file: &'a [u8]) -> Option<&'a [u8]> {
         let start = self.base_offset.checked_add(self.start_crypto as usize)?;
         let end = self.base_offset.checked_add(self.total_length as usize)?;
         file.get(start..end)
@@ -58,8 +58,8 @@ pub struct X509Record {
 }
 
 #[derive(Debug)]
-pub struct TableIndex {
+pub(super) struct TableIndex {
     /// table_id -> absolute file offset of table start.
-    pub by_id: HashMap<u32, usize>,
-    pub relative: HashMap<u32, u32>,
+    pub(super) by_id: HashMap<u32, usize>,
+    pub(super) relative: HashMap<u32, u32>,
 }

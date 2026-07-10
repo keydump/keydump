@@ -8,7 +8,7 @@ pub fn unlock_with_password(
     password: &[u8],
     iterations: u32,
 ) -> Result<Unlocked> {
-    let master = derive_master_key(password, &kc.db_blob.salt, iterations);
+    let master = derive_master_key(password, kc.database_salt(), iterations);
     let mut unlocked = Unlocked::from_master_key(kc, &master[..])?;
     unlocked.method = "password";
     Ok(unlocked)

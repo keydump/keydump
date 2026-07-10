@@ -151,7 +151,7 @@ fn cmd_list(common: CommonArgs) -> Result<()> {
     let kc = KeychainFile::open(&path)?;
     eprintln!(
         "opened {} bytes, blobVersion={:#x}",
-        kc.data.len(),
+        kc.file_len(),
         kc.blob_version()
     );
 
@@ -209,7 +209,7 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
         eprintln!(
             "keychain: {} ({} bytes, blobVersion={:#x})",
             path.display(),
-            kc.data.len(),
+            kc.file_len(),
             kc.blob_version()
         );
     }

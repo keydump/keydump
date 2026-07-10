@@ -200,11 +200,8 @@ pub fn unlock_from_securityd(kc: &KeychainFile) -> Result<Unlocked> {
     require_root()?;
     let pid = securityd_pid()?;
 
-    let ct = kc
-        .db_blob
-        .ciphertext(&kc.data)
-        .ok_or_else(|| KdError::InvalidKeychain("DBBlob ciphertext oob".into()))?;
-    let iv = kc.db_blob.iv;
+    let ct = kc.database_ciphertext()?;
+    let iv = *kc.database_iv();
     let validator = DbKeyValidator::from_keychain(kc)?;
 
     let task = MachTask::for_pid(pid)?;
