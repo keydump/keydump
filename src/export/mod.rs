@@ -1,6 +1,8 @@
 //! Write decrypted keys/certs and match identities.
 
 use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use openssl::pkey::PKey;
@@ -201,22 +203,33 @@ fn sanitize(name: &str) -> String {
 }
 
 fn ensure_dir(p: &Path) -> Result<()> {
-    fs::create_dir_all(p)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o700));
+    match fs::symlink_metadata(p) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(KdError::Msg(format!(
+                    "output directory is not a real directory: {}",
+                    p.display()
+                )));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            builder.create(p)?;
+        }
+        Err(e) => return Err(e.into()),
     }
+    fs::set_permissions(p, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
 fn write_private(path: &Path, data: &[u8]) -> Result<()> {
-    fs::write(path, data)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(data)?;
     Ok(())
 }
 
@@ -275,12 +288,12 @@ pub fn export_all(
     for (i, cert) in certs.iter().enumerate() {
         let base = format!("{:02}_{}", i + 1, sanitize(&cert.print_name));
         if write_der {
-            fs::write(certs_dir.join(format!("{base}.der")), &cert.der)?;
+            write_private(&certs_dir.join(format!("{base}.der")), &cert.der)?;
         }
         if write_pem {
             if let Ok(x) = X509::from_der(&cert.der) {
                 let pem = x.to_pem()?;
-                fs::write(certs_dir.join(format!("{base}.pem")), pem)?;
+                write_private(&certs_dir.join(format!("{base}.pem")), &pem)?;
             }
         }
         stats.certs_written += 1;
@@ -293,14 +306,14 @@ pub fn export_all(
 
         if write_der {
             write_private(&folder.join("key.der"), &id.key.der)?;
-            fs::write(folder.join("cert.der"), &id.cert_der)?;
+            write_private(&folder.join("cert.der"), &id.cert_der)?;
         }
         if write_pem {
             if let Some(pem) = key_der_to_pem(&id.key.der) {
                 write_private(&folder.join("key.pem"), &pem)?;
             }
             if let Ok(x) = X509::from_der(&id.cert_der) {
-                fs::write(folder.join("cert.pem"), x.to_pem()?)?;
+                write_private(&folder.join("cert.pem"), &x.to_pem()?)?;
             }
         }
         if write_p12 {
@@ -415,5 +428,52 @@ mod tests {
         symlink(&target, &link).unwrap();
 
         assert!(validate_output_dir(&link).is_err());
+    }
+
+    #[test]
+    fn private_write_creates_file_with_restricted_permissions() {
+        let root = TestDir::new();
+        let file = root.0.join("secret");
+
+        write_private(&file, b"secret").unwrap();
+
+        let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn private_write_never_overwrites_existing_file() {
+        let root = TestDir::new();
+        let file = root.0.join("secret");
+        fs::write(&file, b"original").unwrap();
+
+        assert!(write_private(&file, b"replacement").is_err());
+        assert_eq!(fs::read(&file).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_write_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestDir::new();
+        let target = root.0.join("target");
+        let link = root.0.join("link");
+        fs::write(&target, b"original").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(write_private(&link, b"replacement").is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+    }
+
+    #[test]
+    fn ensure_dir_enforces_restricted_permissions() {
+        let root = TestDir::new();
+        let dir = root.0.join("output");
+
+        ensure_dir(&dir).unwrap();
+
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
     }
 }
