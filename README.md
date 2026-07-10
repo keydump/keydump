@@ -20,17 +20,18 @@ cargo install --path .
 # Metadata only
 kd list -f ~/Library/Keychains/login.keychain-db
 
-# Classic offline password (legacy keychains)
-kd export -f login.keychain-db -p '...' -o ./out
+# Classic offline password (legacy keychains). A file/FD avoids argv history.
+kd export -f login.keychain-db --password-file /secure/path/keychain.pass -o ./out
 
-# Known 24-byte master key (hex)
-kd export -f login.keychain-db -k <48-hex-chars> -o ./out
+# Known 24-byte master key (hex), read from an already-open file descriptor
+kd export -f login.keychain-db --master-key-file /dev/fd/3 -o ./out 3<master-key.hex
 
 # Live host: recover master key from securityd (macOS, see SIP notes)
 sudo kd export -f ~/Library/Keychains/login.keychain-db --from-securityd -o ./out
 
 # Default: non-exportable keys only. Full dump + filter + P12:
-kd export -k ... -o ./out --include-exportable --name 'NAC' --format p12 --p12-pass labexport
+kd export --master-key-file /dev/fd/3 -o ./out --include-exportable --name 'NAC' \
+  --format p12 --p12-pass-file /dev/fd/4 3<master-key.hex 4<p12.pass
 ```
 
 Default keychain path: `~/Library/Keychains/login.keychain-db`.

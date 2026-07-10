@@ -78,6 +78,10 @@ pub struct ExportArgs {
     )]
     pub p12_pass: String,
 
+    /// Read the PKCS#12 password from a UTF-8 file (trailing newline removed)
+    #[arg(long, value_name = "PATH")]
+    pub p12_pass_file: Option<PathBuf>,
+
     /// Also export keys that are already SecItem-exportable (default: non-exportable only)
     #[arg(long)]
     pub include_exportable: bool,
@@ -97,6 +101,14 @@ pub struct CommonArgs {
     #[arg(short = 'p', long, env = "KD_PASSWORD", hide_env_values = true)]
     pub password: Option<String>,
 
+    /// Read the Keychain password from a UTF-8 file (trailing newline removed)
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = ["password", "master_key", "master_key_file", "from_securityd"]
+    )]
+    pub password_file: Option<PathBuf>,
+
     /// 24-byte master key as hex (48 hex chars)
     #[arg(
         short = 'k',
@@ -105,6 +117,14 @@ pub struct CommonArgs {
         hide_env_values = true
     )]
     pub master_key: Option<String>,
+
+    /// Read the master key hex from a UTF-8 file (trailing newline removed)
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = ["password", "password_file", "master_key", "from_securityd"]
+    )]
+    pub master_key_file: Option<PathBuf>,
 
     /// Recover master key by scanning securityd memory (macOS, root, SIP-sensitive)
     #[arg(long = "from-securityd")]

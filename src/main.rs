@@ -5,7 +5,7 @@ mod export;
 mod keychain;
 mod unlock;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -46,9 +46,47 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Command::List(a) => cmd_list(a.common),
-        Command::Export(a) => cmd_export(a),
+        Command::List(mut a) => {
+            resolve_common_secret_files(&mut a.common)?;
+            cmd_list(a.common)
+        }
+        Command::Export(mut a) => {
+            resolve_common_secret_files(&mut a.common)?;
+            if let Some(path) = a.p12_pass_file.take() {
+                a.p12_pass = read_secret_file(&path, "PKCS#12 password")?;
+            }
+            cmd_export(a)
+        }
     }
+}
+
+fn read_secret_file(path: &Path, label: &str) -> Result<String> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        KdError::Msg(format!(
+            "failed to read {label} file {}: {e}",
+            path.display()
+        ))
+    })?;
+    let mut value = String::from_utf8(bytes).map_err(|_| {
+        KdError::Msg(format!(
+            "{label} file must contain UTF-8 text: {}",
+            path.display()
+        ))
+    })?;
+    while value.ends_with(['\r', '\n']) {
+        value.pop();
+    }
+    Ok(value)
+}
+
+fn resolve_common_secret_files(common: &mut CommonArgs) -> Result<()> {
+    if let Some(path) = common.password_file.take() {
+        common.password = Some(read_secret_file(&path, "Keychain password")?);
+    }
+    if let Some(path) = common.master_key_file.take() {
+        common.master_key = Some(read_secret_file(&path, "master key")?);
+    }
+    Ok(())
 }
 
 fn resolve_keychain(path: &Option<PathBuf>) -> PathBuf {
@@ -217,4 +255,37 @@ fn cmd_export(args: cli::ExportArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    static NEXT_SECRET_FILE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn secret_file_removes_trailing_line_endings() {
+        let id = NEXT_SECRET_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("kd-secret-{}-{id}", std::process::id()));
+        std::fs::write(&path, b"secret\r\n").unwrap();
+
+        let result = read_secret_file(&path, "test secret");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(result.unwrap(), "secret");
+    }
+
+    #[test]
+    fn secret_file_rejects_non_utf8_data() {
+        let id = NEXT_SECRET_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("kd-secret-{}-{id}", std::process::id()));
+        std::fs::write(&path, [0xff]).unwrap();
+
+        let result = read_secret_file(&path, "test secret");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
 }
