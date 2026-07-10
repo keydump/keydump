@@ -113,7 +113,7 @@ pub fn try_password(kc: &KeychainFile, password: &str, iterations: u32) -> Resul
 
 pub fn try_master_key_hex(kc: &KeychainFile, hex_key: &str) -> Result<Unlocked> {
     let master = parse_master_key_hex(hex_key)?;
-    let mut u = Unlocked::from_master_key(kc, &master)?;
+    let mut u = Unlocked::from_master_key(kc, &master[..])?;
     u.method = "master-key";
     Ok(u)
 }
