@@ -171,7 +171,10 @@ fn entropy_ok(key: &[u8]) -> bool {
     u >= 10
 }
 
-/// Parse `vmmap -interleaved` for MALLOC_* rw regions (where key material lives).
+/// Parse `vmmap -interleaved` for MALLOC / Malloc heap rw regions (where key material lives).
+///
+/// Older macOS labels: `MALLOC_TINY`, `MALLOC_SMALL`, …
+/// Newer macOS (e.g. 15+/26+/27): `Malloc Tiny`, `Malloc Small`, …
 fn malloc_regions(pid: i32) -> Result<Vec<(u64, u64)>> {
     let out = Command::new("/usr/bin/vmmap")
         .args(["-interleaved", &pid.to_string()])
@@ -188,38 +191,52 @@ fn malloc_regions(pid: i32) -> Result<Vec<(u64, u64)>> {
     let regions = parse_malloc_regions(&text);
     if regions.is_empty() {
         return Err(KdError::Securityd(
-            "vmmap found no MALLOC regions for securityd".into(),
+            "vmmap found no MALLOC/Malloc heap regions for securityd \
+             (parser supports both legacy MALLOC_* and modern 'Malloc Tiny/Small/…' labels)"
+                .into(),
         ));
     }
     Ok(regions)
 }
 
+/// True for heap region lines (not dylib paths that merely contain "malloc").
+fn is_malloc_region_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    // Legacy: MALLOC_TINY / MALLOC_SMALL / MALLOC_LARGE / MALLOC_NANO / …
+    // Modern: "Malloc Tiny", "Malloc Small", "Malloc Large", "Malloc Metadata", …
+    // Reject summary "MALLOC ZONE" table header — it has no start-end range anyway.
+    trimmed.starts_with("MALLOC_") || trimmed.starts_with("Malloc ")
+}
+
+/// Current protection is writable (`rw-/…` or `rwx/…`), not `---/rwx` guards or `r--/…`.
+fn has_writable_current_prot(line: &str) -> bool {
+    line.contains("rw-/") || line.contains("rwx/")
+}
+
+fn parse_addr_range_token(token: &str) -> Option<(u64, u64)> {
+    let (a, b) = token.split_once('-')?;
+    // Require both ends look like hex addresses (legacy 9+ digits; still allow 6+).
+    if a.len() < 6
+        || b.len() < 6
+        || !a.chars().all(|c| c.is_ascii_hexdigit())
+        || !b.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let start = u64::from_str_radix(a, 16).ok()?;
+    let end = u64::from_str_radix(b, 16).ok()?;
+    (end > start).then_some((start, end))
+}
+
 fn parse_malloc_regions(text: &str) -> Vec<(u64, u64)> {
     let mut regions = Vec::new();
     for line in text.lines() {
-        if !line.contains("MALLOC") {
+        if !is_malloc_region_line(line) || !has_writable_current_prot(line) {
             continue;
         }
-        if !line.contains("rw-") && !line.contains("rwx") {
-            continue;
-        }
-        // e.g. MALLOC_TINY  10344c000-10384c000  [ 4096K ...]
-        let mut found = None;
-        for token in line.split_whitespace() {
-            if let Some((a, b)) = token.split_once('-') {
-                if a.len() >= 6 && b.len() >= 6 && a.chars().all(|c| c.is_ascii_hexdigit()) {
-                    if let (Ok(start), Ok(end)) =
-                        (u64::from_str_radix(a, 16), u64::from_str_radix(b, 16))
-                    {
-                        if end > start {
-                            found = Some((start, end));
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(r) = found {
+        // e.g. legacy:  MALLOC_TINY  10344c000-10384c000  [ 4096K ...]
+        // e.g. modern:  Malloc Tiny  10277c000-102b7c000  [ 4096K ...] rw-/rwx SM=COW
+        if let Some(r) = line.split_whitespace().find_map(parse_addr_range_token) {
             regions.push(r);
         }
     }
@@ -387,6 +404,25 @@ __TEXT       300000000-300001000  [   4K] r-x/r-x SM=COW\n";
         assert_eq!(
             parse_malloc_regions(text),
             vec![(0x100000000, 0x100001000), (0x200000000, 0x208000000)]
+        );
+    }
+
+    #[test]
+    fn vmmap_parser_accepts_modern_title_case_malloc_labels() {
+        // macOS 15+/26+/27 vmmap uses "Malloc Tiny" instead of MALLOC_TINY.
+        let text = "\
+Malloc Guard Page           102778000-10277c000    [   16K     0K     0K     0K] ---/rwx SM=COW  
+Malloc Tiny                 10277c000-102b7c000    [ 4096K   240K   240K     0K] rw-/rwx SM=COW          DefaultMallocZone_0x102ecc000
+Malloc Metadata             102f8c000-102f90000    [   16K    16K    16K     0K] r--/rwx SM=COW  
+Malloc Small               76d0c00000-76d1000000   [ 4096K  1968K  1520K     0K] rw-/rwx SM=COW          DefaultMallocZone_0x102ecc000
+__DATA                      2026124f8-202614894    [    9K     9K   2196     0K] rw-/rw- SM=COW          /usr/lib/system/libsystem_malloc.dylib
+Malloc Tiny                          4096K     240K     240K       0K       0K       0K       0K        1         see MALLOC ZONE table below
+MALLOC ZONE                         SIZE       SIZE       SIZE       SIZE      COUNT  ALLOCATED  FRAG SIZE  % FRAG   COUNT
+";
+
+        assert_eq!(
+            parse_malloc_regions(text),
+            vec![(0x10277c000, 0x102b7c000), (0x76d0c00000, 0x76d1000000),]
         );
     }
 
