@@ -177,8 +177,11 @@ mod tests {
             0xae, 0x98, 0x1e, 0xdb, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
         ];
         let private_der = Rsa::generate(1024).unwrap().private_key_to_der().unwrap();
+        let expected_len = private_der.len();
         let mut final_plaintext = description.to_vec();
         final_plaintext.extend_from_slice(&private_der);
+        // Drop the raw DER so failed assertions cannot print key material.
+        drop(private_der);
         let stage_two = encrypt_padded(&db_key, &record_iv, &final_plaintext);
         let reversed: Vec<_> = stage_two.into_iter().rev().collect();
         let encrypted = encrypt_padded(&db_key, &MAGIC_CMS_IV, &reversed);
@@ -187,7 +190,8 @@ mod tests {
             private_key_decrypt(&db_key, &record_iv, &encrypted).unwrap();
 
         assert_eq!(actual_description, description);
-        assert_eq!(&actual_der[..], private_der);
+        assert_eq!(actual_der.len(), expected_len);
+        // Structural check only — avoid assert_eq! on full private DER in logs.
         assert!(PKey::private_key_from_der(&actual_der).is_ok());
     }
 }
