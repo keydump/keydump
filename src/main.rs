@@ -275,6 +275,9 @@ fn resolve_p12_password(
         return Ok(Zeroizing::new(explicit.unwrap_or_default()));
     }
     if let Some(password) = explicit {
+        if password.is_empty() {
+            return Err(KdError::Msg("PKCS#12 password must not be empty".into()));
+        }
         return Ok(Zeroizing::new(password));
     }
 
@@ -362,6 +365,13 @@ mod tests {
     fn explicit_p12_password_is_preserved() {
         let password = resolve_p12_password(Some("legacy".into()), OutputFormat::P12).unwrap();
         assert_eq!(password.as_str(), "legacy");
+    }
+
+    #[test]
+    fn explicit_empty_p12_password_is_rejected() {
+        let error = resolve_p12_password(Some(String::new()), OutputFormat::P12)
+            .expect_err("empty p12 password");
+        assert!(error.to_string().contains("must not be empty"));
     }
 
     #[test]
