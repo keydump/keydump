@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build (arm64)
+        run: cargo build --locked --release --target aarch64-apple-darwin
+
+      - name: Build (x86_64)
+        run: cargo build --locked --release --target x86_64-apple-darwin
+
+      - name: Create universal (fat) binary
+        run: |
+          mkdir -p dist
+          lipo -create \
+            target/aarch64-apple-darwin/release/kd \
+            target/x86_64-apple-darwin/release/kd \
+            -output dist/kd
+          lipo -archs dist/kd
+          file dist/kd
+          chmod +x dist/kd
+          zip -j dist/kd-darwin-universal-${{ github.ref_name }}.zip dist/kd
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/kd-darwin-universal-${{ github.ref_name }}.zip
+          generate_release_notes: true
