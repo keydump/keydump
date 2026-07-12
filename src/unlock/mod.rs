@@ -156,12 +156,13 @@ mod tests {
             .to_vec()
     }
 
+    /// Classic SSGP wrap fixture: reverse the full stage-2 ciphertext only
+    /// (typically 32 bytes after PKCS#7 padding of the 28-byte inner plaintext).
     fn wrapped_symmetric_blob(db_key: &[u8], record_iv: [u8; 8]) -> SymKeyBlob {
         let mut inner_plaintext = vec![0u8; 28];
         inner_plaintext[4..].fill(0x5a);
         let inner_ciphertext = encrypt_padded(db_key, &record_iv, &inner_plaintext);
-        let mut outer_plaintext: Vec<u8> = inner_ciphertext.iter().rev().copied().collect();
-        outer_plaintext.extend(record_iv.iter().rev());
+        let outer_plaintext: Vec<u8> = inner_ciphertext.iter().rev().copied().collect();
         let ciphertext = encrypt_padded(db_key, &MAGIC_CMS_IV, &outer_plaintext);
         SymKeyBlob {
             iv: record_iv,

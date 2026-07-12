@@ -24,15 +24,19 @@ pub fn decrypt_db_key(
 }
 
 /// Unwrap a 24-byte symmetric SSGP key (RFC 3217 style, reverse first 32 bytes only).
+///
+/// After PKCS#7 unpadding, stage-1 plaintext is typically 32 bytes (the reversed
+/// stage-2 ciphertext). Longer plaintexts are accepted; only the first 32 bytes
+/// are reversed (classic Apple CMS / SSGP unwrap).
 pub fn symmetric_keyblob_decrypt(
     db_key: &[u8],
     record_iv: &[u8],
     encrypted: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
     let plain = des3_cbc_decrypt(db_key, &MAGIC_CMS_IV, encrypted)?;
-    if plain.len() != 40 {
+    if plain.len() < 32 {
         return Err(KdError::Crypto(format!(
-            "sym keyblob stage1 must be 40 bytes, got {}",
+            "sym keyblob stage1 must be at least 32 bytes, got {}",
             plain.len()
         )));
     }
@@ -101,7 +105,7 @@ mod tests {
 
     use super::{
         extract_symmetric_key_plaintext, private_key_decrypt, split_private_key_plaintext,
-        DB_KEY_LEN, MAGIC_CMS_IV,
+        symmetric_keyblob_decrypt, DB_KEY_LEN, MAGIC_CMS_IV,
     };
 
     type TdesCbcEnc = Encryptor<TdesEde3>;
@@ -127,6 +131,25 @@ mod tests {
         plaintext[0] = 1;
         assert!(extract_symmetric_key_plaintext(&plaintext).is_err());
         assert!(extract_symmetric_key_plaintext(&plaintext[..plaintext.len() - 1]).is_err());
+    }
+
+    /// Classic SSGP layout: stage-1 unpadded plaintext is 32 bytes
+    /// (reversed stage-2 ciphertext), not 40.
+    #[test]
+    fn symmetric_keyblob_decrypt_accepts_standard_32_byte_stage1() {
+        let db_key = [0x11; 24];
+        let record_iv = [0x22; 8];
+        let mut inner_plaintext = vec![0u8; 4 + DB_KEY_LEN];
+        inner_plaintext[4..].fill(0x5a);
+        // 28-byte stage-2 → 32-byte ciphertext after PKCS#7 pad.
+        let inner_ciphertext = encrypt_padded(&db_key, &record_iv, &inner_plaintext);
+        assert_eq!(inner_ciphertext.len(), 32);
+        let outer_plaintext: Vec<u8> = inner_ciphertext.iter().rev().copied().collect();
+        let encrypted = encrypt_padded(&db_key, &MAGIC_CMS_IV, &outer_plaintext);
+
+        let key = symmetric_keyblob_decrypt(&db_key, &record_iv, &encrypted).unwrap();
+        assert_eq!(&key[..], &[0x5a; DB_KEY_LEN]);
+        assert!(symmetric_keyblob_decrypt(&[0x33; 24], &record_iv, &encrypted).is_err());
     }
 
     #[test]
