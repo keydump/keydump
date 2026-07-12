@@ -111,8 +111,33 @@ pub fn decrypt_all_keys(
     Ok(out)
 }
 
-fn name_matches(name: &str, filter: &str) -> bool {
+pub fn name_matches(name: &str, filter: &str) -> bool {
     name.to_lowercase().contains(&filter.to_lowercase())
+}
+
+/// Choose which private-key records to decrypt when a name filter is set.
+///
+/// If any certificate print name matches the filter, all private keys are
+/// still decrypted so identities can be matched by public key against those
+/// certs. Otherwise only name-matching private keys are decrypted.
+pub fn private_keys_for_decrypt(
+    records: Vec<PrivateKeyRecord>,
+    certs: &[X509Record],
+    name_filter: Option<&str>,
+) -> Vec<PrivateKeyRecord> {
+    let Some(filter) = name_filter else {
+        return records;
+    };
+    let any_cert_matches = certs
+        .iter()
+        .any(|cert| name_matches(&cert.print_name, filter));
+    if any_cert_matches {
+        return records;
+    }
+    records
+        .into_iter()
+        .filter(|record| name_matches(&record.print_name, filter))
+        .collect()
 }
 
 pub fn filter_by_name(
@@ -600,6 +625,49 @@ mod tests {
         assert_eq!(certs.len(), 1);
         assert_eq!(identities.len(), 1);
         assert_eq!(identities[0].cert.print_name, "CLIENT CERT");
+    }
+
+    fn sample_private_key(name: &str) -> PrivateKeyRecord {
+        PrivateKeyRecord {
+            print_name: name.into(),
+            key_size_bits: 2048,
+            extractable: 0,
+            iv: [0; 8],
+            encrypted: vec![0; 16],
+        }
+    }
+
+    #[test]
+    fn decrypt_selection_skips_unrelated_keys_when_only_key_names_match() {
+        let records = vec![
+            sample_private_key("NAC client"),
+            sample_private_key("unrelated"),
+        ];
+        let certs = vec![X509Record {
+            print_name: "other cert".into(),
+            der: vec![1],
+        }];
+
+        let selected = private_keys_for_decrypt(records, &certs, Some("nac"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].print_name, "NAC client");
+    }
+
+    #[test]
+    fn decrypt_selection_keeps_all_keys_when_a_certificate_name_matches() {
+        let records = vec![
+            sample_private_key("unrelated key"),
+            sample_private_key("another key"),
+        ];
+        let certs = vec![X509Record {
+            print_name: "NAC CERT".into(),
+            der: vec![1],
+        }];
+
+        let selected = private_keys_for_decrypt(records, &certs, Some("nac"));
+
+        assert_eq!(selected.len(), 2);
     }
 
     fn certificate_for_key(key: &PKey<Private>) -> Vec<u8> {

@@ -16,7 +16,7 @@ use crate::cli::{Cli, Command, CommonArgs};
 use crate::error::{KdError, Result};
 use crate::export::{
     decrypt_all_keys, default_keychain_path, export_all, filter_by_name, match_identities,
-    validate_output_dir, OutputFormat,
+    private_keys_for_decrypt, validate_output_dir, OutputFormat,
 };
 use crate::keychain::KeychainFile;
 use crate::unlock::{try_master_key_hex, try_password, unlock_from_securityd, Unlocked};
@@ -230,7 +230,11 @@ fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
     }
 
     let pks = kc.private_keys()?;
-    let mut certs: Vec<_> = kc.certificates()?.into_iter().map(Rc::new).collect();
+    let raw_certs = kc.certificates()?;
+    // Decrypt only what the name filter can require: name-matching keys alone,
+    // or every key when a certificate name matches (identity matching needs it).
+    let pks = private_keys_for_decrypt(pks, &raw_certs, args.name.as_deref());
+    let mut certs: Vec<_> = raw_certs.into_iter().map(Rc::new).collect();
     let mut keys = decrypt_all_keys(&unlocked, &pks, args.include_exportable)?;
     let mut identities = match_identities(&keys, &certs);
     if let Some(filter) = args.name.as_deref() {
