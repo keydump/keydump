@@ -8,10 +8,25 @@ Exports private keys (including SecItem **non-exportable** / `NeverExtractable` 
 
 ## Install
 
+### Download (recommended)
+
+Download the universal binary from [GitHub Releases](https://github.com/keydump/keydump/releases):
+
 ```bash
-cd ~/Projects/keydump
+curl -L -o kd.zip https://github.com/keydump/keydump/releases/latest/download/kd-darwin-universal.zip
+unzip kd.zip
+chmod +x kd
+sudo mv kd /usr/local/bin/
+```
+
+### Build from source
+
+Requires Rust 1.85+.
+
+```bash
+git clone https://github.com/keydump/keydump.git
+cd keydump
 cargo install --path .
-# binary: kd
 ```
 
 ## Commands
