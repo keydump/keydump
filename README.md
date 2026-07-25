@@ -13,8 +13,10 @@ Exports private keys (including SecItem **non-exportable** / `NeverExtractable` 
 Download the universal binary from [GitHub Releases](https://github.com/keydump/keydump/releases):
 
 ```bash
-curl -L -o kd.zip https://github.com/keydump/keydump/releases/latest/download/kd-darwin-universal.zip
-unzip kd.zip
+curl -LO https://github.com/keydump/keydump/releases/latest/download/kd-darwin-universal.zip
+curl -LO https://github.com/keydump/keydump/releases/latest/download/kd-darwin-universal.zip.sha256
+shasum -a 256 -c kd-darwin-universal.zip.sha256
+unzip kd-darwin-universal.zip
 chmod +x kd
 sudo mv kd /usr/local/bin/
 ```
@@ -111,7 +113,8 @@ cargo test --locked --all-targets --all-features
 Crypto known-answer tests consume independently verified static vectors; the
 repository intentionally has no vector-generation script. See
 [`tests/kat/README.md`](tests/kat/README.md) for provenance and change rules,
-and [`NEXT.md`](NEXT.md) for the remaining end-to-end fixture plan.
+and [`tests/fixtures/README.md`](tests/fixtures/README.md) for the remaining
+end-to-end fixture plan.
 
 ## Acknowledgments
 

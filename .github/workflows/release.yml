@@ -20,9 +20,18 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Lint
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Build (arm64)
         run: cargo build --locked --release --target aarch64-apple-darwin
@@ -40,12 +49,15 @@ jobs:
           lipo -archs dist/kd
           file dist/kd
           chmod +x dist/kd
-          zip -j dist/kd-darwin-universal-${{ github.ref_name }}.zip dist/kd
+          cd dist
+          zip -j kd-darwin-universal.zip kd
+          shasum -a 256 kd-darwin-universal.zip > kd-darwin-universal.zip.sha256
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            dist/kd-darwin-universal-${{ github.ref_name }}.zip
+            dist/kd-darwin-universal.zip
+            dist/kd-darwin-universal.zip.sha256
           generate_release_notes: true
