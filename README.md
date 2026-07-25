@@ -100,6 +100,19 @@ widely observable on the host.
   protected files or `/dev/fd/*` over placing secrets directly in command arguments.
 - Do not pass `--print-secrets` unless debugging in a controlled environment.
 
+## Development
+
+Run the full test suite with:
+
+```bash
+cargo test --locked --all-targets --all-features
+```
+
+Crypto known-answer tests consume independently verified static vectors; the
+repository intentionally has no vector-generation script. See
+[`tests/kat/README.md`](tests/kat/README.md) for provenance and change rules,
+and [`NEXT.md`](NEXT.md) for the remaining end-to-end fixture plan.
+
 ## Acknowledgments
 
 Inspired by [n0fate/chainbreaker](https://github.com/n0fate/chainbreaker) and

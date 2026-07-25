@@ -1,10 +1,3 @@
-mod cli;
-mod crypto;
-mod error;
-mod export;
-mod keychain;
-mod unlock;
-
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -12,14 +5,14 @@ use std::rc::Rc;
 use clap::Parser;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::cli::{Cli, Command, CommonArgs};
-use crate::error::{KdError, Result};
-use crate::export::{
+use keydump::cli::{Cli, Command, CommonArgs, ExportArgs};
+use keydump::error::{KdError, Result};
+use keydump::export::{
     decrypt_all_keys, default_keychain_path, export_all, filter_by_name, match_identities,
     private_keys_for_decrypt, validate_output_dir, OutputFormat,
 };
-use crate::keychain::KeychainFile;
-use crate::unlock::{try_master_key_hex, try_password, unlock_from_securityd, Unlocked};
+use keydump::keychain::KeychainFile;
+use keydump::unlock::{try_master_key_hex, try_password, unlock_from_securityd, Unlocked};
 
 fn main() -> ExitCode {
     if let Err(e) = run() {
@@ -56,7 +49,7 @@ fn run() -> Result<()> {
     }
 }
 
-fn resolve_export_inputs(mut args: cli::ExportArgs) -> Result<cli::ExportArgs> {
+fn resolve_export_inputs(mut args: ExportArgs) -> Result<ExportArgs> {
     // Reject an unsafe destination before reading any credential material.
     validate_output_dir(&args.output)?;
     resolve_common_secret_files(&mut args.common)?;
@@ -203,7 +196,7 @@ fn cmd_list(common: CommonArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_export(mut args: cli::ExportArgs) -> Result<()> {
+fn cmd_export(mut args: ExportArgs) -> Result<()> {
     // Fail before opening or decrypting the keychain if results could be mixed
     // with an earlier export.
     validate_output_dir(&args.output)?;

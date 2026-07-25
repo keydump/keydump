@@ -1,5 +1,4 @@
-use hmac::Hmac;
-use pbkdf2::pbkdf2;
+use pbkdf2::pbkdf2_hmac;
 use sha1::Sha1;
 use zeroize::Zeroizing;
 
@@ -15,7 +14,6 @@ pub fn derive_master_key(
     iterations: u32,
 ) -> Zeroizing<[u8; MASTER_KEY_LEN]> {
     let mut key = Zeroizing::new([0u8; MASTER_KEY_LEN]);
-    pbkdf2::<Hmac<Sha1>>(password, salt, iterations, &mut key[..])
-        .expect("pbkdf2 length is fixed and valid");
+    pbkdf2_hmac::<Sha1>(password, salt, iterations, &mut key[..]);
     key
 }

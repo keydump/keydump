@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "description": "Published PBKDF2-HMAC-SHA1 known answers; keydump compares the published prefix of its fixed 24-byte output.",
+  "provenance": {
+    "origin_kind": "published_standard",
+    "source": "RFC 6070 section 2",
+    "source_url": "https://www.rfc-editor.org/rfc/rfc6070.html#section-2",
+    "source_revision": "RFC 6070, January 2011",
+    "oracle": "Published RFC test-vector bytes",
+    "verification": "The expected bytes below are copied from the RFC. The 25-byte case is truncated to its first 24 bytes to match the classic Keychain master-key length."
+  },
+  "cases": [
+    {
+      "name": "rfc6070_iteration_1",
+      "password_hex": "70617373776f7264",
+      "salt_hex": "73616c74",
+      "iterations": 1,
+      "published_dk_len": 20,
+      "expected_derived_key_prefix_hex": "0c60c80f961f0e71f3a9b524af6012062fe037a6"
+    },
+    {
+      "name": "rfc6070_iteration_2",
+      "password_hex": "70617373776f7264",
+      "salt_hex": "73616c74",
+      "iterations": 2,
+      "published_dk_len": 20,
+      "expected_derived_key_prefix_hex": "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"
+    },
+    {
+      "name": "rfc6070_iteration_4096",
+      "password_hex": "70617373776f7264",
+      "salt_hex": "73616c74",
+      "iterations": 4096,
+      "published_dk_len": 20,
+      "expected_derived_key_prefix_hex": "4b007901b765489abead49d926f721d065a429c1"
+    },
+    {
+      "name": "rfc6070_long_inputs_24_byte_prefix",
+      "password_hex": "70617373776f726450415353574f524470617373776f7264",
+      "salt_hex": "73616c7453414c5473616c7453414c5473616c7453414c5473616c7453414c5473616c74",
+      "iterations": 4096,
+      "published_dk_len": 25,
+      "expected_derived_key_prefix_hex": "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f070"
+    },
+    {
+      "name": "rfc6070_embedded_nul",
+      "password_hex": "7061737300776f7264",
+      "salt_hex": "7361006c74",
+      "iterations": 4096,
+      "published_dk_len": 16,
+      "expected_derived_key_prefix_hex": "56fa6aa75548099dcc37d7f03425e0c3"
+    }
+  ]
+}

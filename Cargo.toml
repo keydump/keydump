@@ -10,26 +10,37 @@ repository = "https://github.com/keydump/keydump"
 homepage = "https://github.com/keydump/keydump"
 publish = false
 
+[lib]
+name = "keydump"
+path = "src/lib.rs"
+
 [[bin]]
 name = "kd"
 path = "src/main.rs"
 
+[[test]]
+name = "crypto_kat"
+path = "tests/kat/crypto_kat.rs"
+
 [dependencies]
-cbc = "0.1"
-cipher = "0.4"
+cbc = "0.2"
+cipher = "0.5"
 clap = { version = "4", features = ["derive", "env"] }
-des = "0.8"
+des = "0.9"
 hex = "0.4"
-hmac = "0.12"
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 rpassword = "7"
-sha1 = "0.10"
+sha1 = "0.11"
 thiserror = "2"
-zeroize = { version = "1", features = ["derive"] }
+zeroize = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Vendored OpenSSL provides deterministic PKCS#12 and X.509 support on macOS.
 openssl = { version = "0.10", features = ["vendored"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 lto = true

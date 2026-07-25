@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "description": "Canonical Apple custom-CMS SSGP key wrap: TEMP2 is record_iv || encrypted(u32be(description_len) || description || key), then all of TEMP2 is reversed and encrypted with MAGIC_CMS_IV.",
+  "magic_cms_iv_hex": "4adda22c79e82105",
+  "provenance": {
+    "origin_kind": "spec_derived_static_vector",
+    "layout_source": "Apple wrapKeyCms.cpp",
+    "source_revision": "db15acbe6a7f257a859ad9a3bb86097bfe0679d9",
+    "source_url": "https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/OSX/libsecurity_apple_csp/lib/wrapKeyCms.cpp#L31-L51",
+    "decoder_cross_check": "n0fate/chainbreaker keyblob_decryption",
+    "decoder_revision": "2eb467d9355e61f1dfecee1cec41b06033186326",
+    "decoder_source_url": "https://github.com/n0fate/chainbreaker/blob/2eb467d9355e61f1dfecee1cec41b06033186326/chainbreaker/__init__.py#L735-L751",
+    "oracle": "Ruby 2.6.10 OpenSSL bindings backed by LibreSSL 3.3.6",
+    "verification": "The static ciphertext was produced from the pinned Apple byte layout with the independent OpenSSL 3DES implementation, then decrypted back to the recorded payload. Its outer plaintext is 40 bytes and ends in reverse(record_iv), as required by TEMP2 = IV || TEMP1."
+  },
+  "cases": [
+    {
+      "name": "canonical_zero_description",
+      "db_key_hex": "000102030405060708090a0b0c0d0e0f1011121314151617",
+      "record_iv_hex": "08090a0b0c0d0e0f",
+      "encrypted_hex": "6a9d0ad4e052ed70e3300ca9be925b025ee373425f8ce6da15939a12adeecb2e75366beccf27d7943b213925a5b810fc",
+      "description_hex": "",
+      "symmetric_key_hex": "6465666768696a6b6c6d6e6f707172737475767778797a7b",
+      "expected_stage1_len": 40
+    }
+  ]
+}

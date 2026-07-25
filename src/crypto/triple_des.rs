@@ -1,5 +1,5 @@
 use cbc::Decryptor;
-use cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use cipher::{block_padding::Pkcs7, BlockModeDecrypt, KeyIvInit};
 use des::TdesEde3;
 use zeroize::Zeroizing;
 
@@ -31,7 +31,7 @@ pub fn des3_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Zero
     let dec = TdesCbcDec::new_from_slices(key, iv)
         .map_err(|e| KdError::Crypto(format!("init 3DES: {e}")))?;
     let plain = dec
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .decrypt_padded::<Pkcs7>(&mut buf)
         .map_err(|_| KdError::WrongCredential)?;
     Ok(Zeroizing::new(plain.to_vec()))
 }

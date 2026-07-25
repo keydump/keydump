@@ -138,7 +138,7 @@ pub fn try_master_key_hex(kc: &KeychainFile, hex_key: &str) -> Result<Unlocked> 
 #[cfg(test)]
 mod tests {
     use cbc::Encryptor;
-    use cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
     use des::TdesEde3;
 
     use super::{DbKeyValidator, SymKeyBlob};
@@ -151,18 +151,19 @@ mod tests {
         buffer[..plaintext.len()].copy_from_slice(plaintext);
         TdesCbcEnc::new_from_slices(key, iv)
             .unwrap()
-            .encrypt_padded_mut::<Pkcs7>(&mut buffer, plaintext.len())
+            .encrypt_padded::<Pkcs7>(&mut buffer, plaintext.len())
             .unwrap()
             .to_vec()
     }
 
-    /// Classic SSGP wrap fixture: reverse the full stage-2 ciphertext only
-    /// (typically 32 bytes after PKCS#7 padding of the 28-byte inner plaintext).
+    /// Canonical Apple CMS wrap: reverse `record_iv || inner_ciphertext`.
     fn wrapped_symmetric_blob(db_key: &[u8], record_iv: [u8; 8]) -> SymKeyBlob {
         let mut inner_plaintext = vec![0u8; 28];
         inner_plaintext[4..].fill(0x5a);
         let inner_ciphertext = encrypt_padded(db_key, &record_iv, &inner_plaintext);
-        let outer_plaintext: Vec<u8> = inner_ciphertext.iter().rev().copied().collect();
+        let mut outer_plaintext = record_iv.to_vec();
+        outer_plaintext.extend_from_slice(&inner_ciphertext);
+        outer_plaintext.reverse();
         let ciphertext = encrypt_padded(db_key, &MAGIC_CMS_IV, &outer_plaintext);
         SymKeyBlob {
             iv: record_iv,
